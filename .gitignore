@@ -1,0 +1,14 @@
+/foobar2000
+/.idea
+.env
+
+.navicache
+.testcache
+
+*.exe
+*.lnk
+*log
+
+/foobar-plugin/foo_navifsp
+/foobar-plugin/x64
+/foobar-plugin/lib/*

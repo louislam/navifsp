@@ -1,0 +1,15 @@
+{
+    "version": "1.0.0",
+    "type": "module",
+    "scripts": {
+        "build": "node build.ts server",
+        "build-plugin": "node build.ts plugin",
+        "build-plugin:win32": "node build.ts plugin Win32",
+        "build-plugin:x64": "node build.ts plugin x64",
+        "build-plugin:arm64ec": "node build.ts plugin ARM64EC",
+        "build-server": "node build.ts server",
+        "pack": "node pack.ts",
+        "test": "cd server && go test -failfast -v -count=1 .",
+        "fmt": "deno fmt && cd server && go fmt"
+    }
+}
