@@ -11,9 +11,13 @@ It should also work with other music players.
 - Supports caching
 - Save bandwidth when scanning all files - only reads a small chunk of the song data to get the metadata.
 
-<img width="400" src="https://github.com/user-attachments/assets/55974051-c767-49d4-bebe-1b282b0c0223" />
-<img width="400" src="https://github.com/user-attachments/assets/6135f4eb-8468-4a80-bdb2-d495b4bca8ec" />
-<img width="400" src="https://github.com/user-attachments/assets/d8bf0e89-197b-4c09-b9cd-87614c42c31f" />
+## Preview
+
+<img width="700" src="https://github.com/user-attachments/assets/55974051-c767-49d4-bebe-1b282b0c0223" />
+
+<img width="700" src="https://github.com/user-attachments/assets/6135f4eb-8468-4a80-bdb2-d495b4bca8ec" />
+
+<img width="700" src="https://github.com/user-attachments/assets/d8bf0e89-197b-4c09-b9cd-87614c42c31f" />
 
 ## Requirements
 
