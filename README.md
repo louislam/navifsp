@@ -11,6 +11,16 @@ It should also work with other music players.
 - Supports caching
 - Save bandwidth when scanning all files - only reads a small chunk of the song data to get the metadata.
 
+## Preview
+
+Mounted folder in File Explorer:
+
+<img width="600" src="https://github.com/user-attachments/assets/d8bf0e89-197b-4c09-b9cd-87614c42c31f" />
+
+What it looks like in Foobar2000 (bascially no different from a local music library):
+
+<img width="600" src="https://github.com/user-attachments/assets/6135f4eb-8468-4a80-bdb2-d495b4bca8ec" />
+
 ## Requirements
 
 - Windows 10 or 11 (x64)
@@ -18,6 +28,21 @@ It should also work with other music players.
 - foobar2000 (or other music players)
 
 ## Basic usage
+
+1. Download the latest release from https://github.com/louislam/navifsp/releases/latest.
+2. Unzip
+3. Open `.env` file and set your Navidrome `username`, `password`, and your `Navidrome base URL`.
+4. Make sure you actually have WinFSP installed.
+5. Run `navifsp.exe` to mount your Navidrome music library, by default it will mount to `N:\` drive.
+6. Add `N:\` to your foobar2000 music library, and click "Apply".
+7. Recommend to turn off `Rescan on startup` and `Monitor for changes while running` for better performance.
+
+<img width="500" src="https://github.com/user-attachments/assets/6c872d09-dea7-449c-b156-cc38964a2699" />
+
+
+### Command line usage
+
+If you don't want to use `.env` file, you can also run the exe with command line flags:
 
 ```bash
 navifsp.exe --username abc --password 123 --base-url https://yournavidrome.com --mount N:
@@ -42,7 +67,7 @@ Environment variables can also be set via a `.env` file next to the exe file.
 
 ### Add to Startup
 
-1. You must have to use `.env` file to configure. Rename `.env.example` to `.env`.
+1. You must have to use `.env` file to configure, flags are not supported.
 2. NAVIFSP_NO_WINDOW=true
 3. NAVIFSP_STARTUP_AT_LOGIN=true
 4. Run `navifsp.exe`, now it should be running in the background, also next time you login, it will auto start.
@@ -75,8 +100,10 @@ As a very long time user of Foobar2000, I honestly can't adopt to any existing N
 Before I finally decided to write using WinFSP, the project was originally developed using TypeScript and WebDAV, and surprisingly, using WebDAV is very bad desicion:
 
 - Desipte the fact that Foobar2000 supports WebDAV natively, it can't show the album covers for unknown reason.
-- Windows is able to map WebDAV as a network drive, and some files are missing for unknown reason.
+- Windows is able to map WebDAV as a network drive, and some files are missing for unknown reason. (They are fine in WinSCP for comparison)
 - Node.js or Deno is really slow comparing to Golang, even though it looks like I have written everything in async, blocking I/O still occurs for unknown reason.
+
+For WinFsp (or File explorer?), I just don't understand why the same file operations got fired multiple times at very short time interval, which make me no choice, I have to add 10 seconds cache to Navidrome requests, which is werid, but works.
 
 ## Possible Future Features?
 
@@ -85,3 +112,9 @@ Before I finally decided to write using WinFSP, the project was originally devel
 - Ability to play cached music offline, cache whole folder structure?
 - Playlists?
 - Foobar2000 component?
+
+## Related Projects
+
+- foo_opensubsonic (https://github.com/michioxd/foo_opensubsonic)
+
+If you are fine with your songs only added to playlist, but not added to your music library, it should be a simpler solution.
