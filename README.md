@@ -100,7 +100,7 @@ As a very long time user of Foobar2000, I honestly can't adopt to any existing N
 Before I finally decided to write using WinFSP, the project was originally developed using TypeScript and WebDAV, and surprisingly, using WebDAV is very bad desicion:
 
 - Desipte the fact that Foobar2000 supports WebDAV natively, it can't show the album covers for unknown reason.
-- Windows is able to map WebDAV as a network drive, and some files are missing for unknown reason.
+- Windows is able to map WebDAV as a network drive, and some files are missing for unknown reason. (They are fine in WinSCP for comparison)
 - Node.js or Deno is really slow comparing to Golang, even though it looks like I have written everything in async, blocking I/O still occurs for unknown reason.
 
 For WinFsp (or File explorer?), I just don't understand why the same file operations got fired multiple times at very short time interval, which make me no choice, I have to add 10 seconds cache to Navidrome requests, which is werid, but works.
