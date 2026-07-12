@@ -57,7 +57,7 @@ Set `ND_RECENTLYADDEDBYMODTIME=true` on your Navidrome server to use the actual 
 
 ### Why are some artist folders empty?
 
-NaviFSP only shows albums where the artist is the primary album artist. Artists who only appear as co-artists or guest performers will have empty folders.
+To avoid duplicate albums, NaviFSP only shows albums where the artist is the primary album artist. Artists who only appear as co-artists or guest performers will have empty folders.
 
 ### Why are the folder and filenames random IDs instead of artist/album/song names?
 
