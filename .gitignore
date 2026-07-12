@@ -12,3 +12,5 @@
 /foobar-plugin/foo_navifsp
 /foobar-plugin/x64
 /foobar-plugin/lib/*
+/release/
+/test/

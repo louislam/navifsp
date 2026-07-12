@@ -19,6 +19,13 @@ It should also work with other music players.
 
 ## Basic usage
 
+1. Download the latest release from https://github.com/louislam/navifsp/releases/latest.
+2. Unzip
+3. Open `.env` file and set your Navidrome `username`, `password`, and your `Navidrome base URL`.
+4. Make sure you actually have WinFSP installed.
+5. Run `navifsp.exe` to mount your Navidrome music library, by default it will mount to `N:\` drive.
+6. Done.
+
 ```bash
 navifsp.exe --username abc --password 123 --base-url https://yournavidrome.com --mount N:
 ```
@@ -42,7 +49,7 @@ Environment variables can also be set via a `.env` file next to the exe file.
 
 ### Add to Startup
 
-1. You must have to use `.env` file to configure. Rename `.env.example` to `.env`.
+1. You must have to use `.env` file to configure, flags are not supported.
 2. NAVIFSP_NO_WINDOW=true
 3. NAVIFSP_STARTUP_AT_LOGIN=true
 4. Run `navifsp.exe`, now it should be running in the background, also next time you login, it will auto start.
@@ -85,3 +92,9 @@ Before I finally decided to write using WinFSP, the project was originally devel
 - Ability to play cached music offline, cache whole folder structure?
 - Playlists?
 - Foobar2000 component?
+
+## Related Projects
+
+- foo_opensubsonic (https://github.com/michioxd/foo_opensubsonic)
+
+If you are fine with your songs only added to playlist, but not added to your music library, it should be a simpler solution.
