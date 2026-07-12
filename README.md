@@ -13,11 +13,17 @@ It should also work with other music players.
 
 ## Preview
 
-<img width="700" src="https://github.com/user-attachments/assets/55974051-c767-49d4-bebe-1b282b0c0223" />
+Mounted folder in File Explorer:
 
-<img width="700" src="https://github.com/user-attachments/assets/6135f4eb-8468-4a80-bdb2-d495b4bca8ec" />
+<img width="600" src="https://github.com/user-attachments/assets/d8bf0e89-197b-4c09-b9cd-87614c42c31f" />
 
-<img width="700" src="https://github.com/user-attachments/assets/d8bf0e89-197b-4c09-b9cd-87614c42c31f" />
+What it looks like in Foobar2000 (bascially no different from a local music library):
+
+<img width="600" src="https://github.com/user-attachments/assets/6135f4eb-8468-4a80-bdb2-d495b4bca8ec" />
+
+Song properties in Foobar2000 (read-only):
+
+<img width="600" src="https://github.com/user-attachments/assets/55974051-c767-49d4-bebe-1b282b0c0223" />
 
 ## Requirements
 
@@ -35,7 +41,7 @@ It should also work with other music players.
 6. Add `N:\` to your foobar2000 music library, and click "Apply".
 7. Recommend to turn off `Rescan on startup` and `Monitor for changes while running` for better performance.
 
-<img width="879" src="https://github.com/user-attachments/assets/6c872d09-dea7-449c-b156-cc38964a2699" />
+<img width="500" src="https://github.com/user-attachments/assets/6c872d09-dea7-449c-b156-cc38964a2699" />
 
 
 ### Command line usage
