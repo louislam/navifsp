@@ -21,10 +21,6 @@ What it looks like in Foobar2000 (bascially no different from a local music libr
 
 <img width="600" src="https://github.com/user-attachments/assets/6135f4eb-8468-4a80-bdb2-d495b4bca8ec" />
 
-Song properties in Foobar2000 (read-only):
-
-<img width="600" src="https://github.com/user-attachments/assets/55974051-c767-49d4-bebe-1b282b0c0223" />
-
 ## Requirements
 
 - Windows 10 or 11 (x64)
