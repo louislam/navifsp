@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 
@@ -26,6 +27,21 @@ func main() {
 		if arg == "--no-window" {
 			hideConsoleWindow()
 			break
+		}
+	}
+
+	// --stop: kill all running navifsp.exe processes
+	for _, arg := range os.Args[1:] {
+		if arg == "--stop" {
+			cmd := exec.Command("taskkill", "/IM", "navifsp.exe", "/F")
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				fmt.Println("No running NaviFSP process found.")
+			} else {
+				fmt.Println("NaviFSP stopped.")
+			}
+			os.Exit(0)
 		}
 	}
 
@@ -53,6 +69,9 @@ func main() {
 		fmt.Printf(`NaviFSP %s
 
 Usage: navifsp --base-url <URL> --username <U> --password <P> [options]
+
+Commands:
+  --stop    Stop all running NaviFSP processes
 
 Options:
 `, version)

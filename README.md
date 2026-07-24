@@ -48,10 +48,19 @@ If you don't want to use `.env` file, you can also run the exe with command line
 navifsp.exe --username abc --password 123 --base-url https://yournavidrome.com --mount N:
 ```
 
+### Stop NaviFSP
+
+To stop all running NaviFSP processes:
+
+```bash
+navifsp.exe --stop
+```
+
 ### Flags and Environment Variables
 
 | Flag                   | Env Var                      | Default                       | Required | Description                                                   |
 |------------------------|------------------------------|-------------------------------|----------|---------------------------------------------------------------|
+| `--stop`               |                              |                               |          | Stop all running NaviFSP processes                            |
 | `--username`           | `NAVIFSP_USERNAME`           |                               | Yes      | Navidrome username                                            |
 | `--password`           | `NAVIFSP_PASSWORD`           |                               | Yes      | Navidrome password                                            |
 | `--base-url`           | `NAVIFSP_BASE_URL`           |                               | Yes      | Navidrome base URL (e.g. https://yournavidrome.com)           |
