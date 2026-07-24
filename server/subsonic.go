@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/md5"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,11 +25,21 @@ type subsonicClient struct {
 }
 
 func newSubsonicClient(baseURL, username, password string) *subsonicClient {
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+		ForceAttemptHTTP2:   true,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: false,
+		},
+	}
 	return &subsonicClient{
 		baseURL:  baseURL,
 		username: username,
 		password: password,
-		client:   &http.Client{},
+		client:   &http.Client{Transport: transport},
 		cache:    cache.New(10*time.Second, 30*time.Second),
 	}
 }
