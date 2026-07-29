@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -39,12 +40,13 @@ func (fi *navFileInfo) Mode() os.FileMode {
 
 // readSeeker fetches song data in chunks via range requests.
 type readSeeker struct {
-	ctx      context.Context
-	client   *subsonicClient
-	songID   string
-	cacheDir string
-	fileSize int64
-	pos      int64
+	ctx           context.Context
+	client        *subsonicClient
+	songID        string
+	cacheDir      string
+	fileSize      int64
+	pos           int64
+	chunkMemCache *sync.Map
 }
 
 func (r *readSeeker) Read(p []byte) (int, error) {
@@ -79,6 +81,19 @@ func (r *readSeeker) Read(p []byte) (int, error) {
 		}
 	}
 
+	if data, ok := r.readChunkFromMem(chunkStart); ok {
+		off := int(r.pos - chunkStart)
+		n := int(end - r.pos)
+		if off+n > len(data) {
+			n = len(data) - off
+		}
+		if n > 0 {
+			copy(p, data[off:off+n])
+			r.pos += int64(n)
+			return n, nil
+		}
+	}
+
 	debugLog("Fetch %s %d-%d", r.songID, chunkStart, chunkEnd)
 	body, err := r.client.streamSongRange(r.ctx, r.songID, chunkStart, chunkEnd)
 	if err != nil {
@@ -90,6 +105,7 @@ func (r *readSeeker) Read(p []byte) (int, error) {
 		return 0, fmt.Errorf("reading range: %w", err)
 	}
 
+	r.writeChunkToMem(chunkStart, data)
 	if r.cacheDir != "" {
 		CacheChunk(r.songID, int(chunkStart), data, r.cacheDir)
 	}
@@ -138,6 +154,18 @@ func (r *readSeeker) ReadAt(p []byte, off int64) (int, error) {
 		}
 	}
 
+	if data, ok := r.readChunkFromMem(chunkStart); ok {
+		relOff := int(off - chunkStart)
+		n := int(end - off)
+		if relOff+n > len(data) {
+			n = len(data) - relOff
+		}
+		if n > 0 {
+			copy(p, data[relOff:relOff+n])
+			return n, nil
+		}
+	}
+
 	debugLog("FetchAt %s %d-%d", r.songID, chunkStart, chunkEnd)
 	body, err := r.client.streamSongRange(r.ctx, r.songID, chunkStart, chunkEnd)
 	if err != nil {
@@ -149,6 +177,7 @@ func (r *readSeeker) ReadAt(p []byte, off int64) (int, error) {
 		return 0, fmt.Errorf("reading range: %w", err)
 	}
 
+	r.writeChunkToMem(chunkStart, data)
 	if r.cacheDir != "" {
 		CacheChunk(r.songID, int(chunkStart), data, r.cacheDir)
 	}
@@ -163,6 +192,26 @@ func (r *readSeeker) ReadAt(p []byte, off int64) (int, error) {
 	}
 	copy(p, data[relOff:relOff+int64(n)])
 	return n, nil
+}
+
+func (r *readSeeker) readChunkFromMem(chunkStart int64) ([]byte, bool) {
+	if r.chunkMemCache == nil {
+		return nil, false
+	}
+	key := fmt.Sprintf("%s:%d", r.songID, chunkStart)
+	val, ok := r.chunkMemCache.Load(key)
+	if !ok {
+		return nil, false
+	}
+	return val.([]byte), true
+}
+
+func (r *readSeeker) writeChunkToMem(chunkStart int64, data []byte) {
+	if r.chunkMemCache == nil {
+		return
+	}
+	key := fmt.Sprintf("%s:%d", r.songID, chunkStart)
+	r.chunkMemCache.Store(key, data)
 }
 
 func (r *readSeeker) Seek(offset int64, whence int) (int64, error) {

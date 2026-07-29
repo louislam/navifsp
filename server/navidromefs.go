@@ -31,6 +31,7 @@ type NavidromeFS struct {
 	coverCacheDir string
 	startTime     time.Time
 	coverMemCache sync.Map
+	chunkMemCache sync.Map
 }
 
 func NewNavidromeFS(client *subsonicClient, musicCacheDir string, coverCacheDir string) *NavidromeFS {
@@ -350,11 +351,12 @@ func (fs *NavidromeFS) OpenFile(name string, flag int, perm os.FileMode) (gofs.F
 
 		return &navSongFile{
 			readSeeker: &readSeeker{
-				ctx:      ctx,
-				client:   fs.client,
-				songID:   songID,
-				cacheDir: fs.cacheDir,
-				fileSize: size,
+				ctx:           ctx,
+				client:        fs.client,
+				songID:        songID,
+				cacheDir:      fs.cacheDir,
+				fileSize:      size,
+				chunkMemCache: &fs.chunkMemCache,
 			},
 			info: &navFileInfo{name: parts[2], size: size, modTime: parseTime(created), isDir: false},
 		}, nil
