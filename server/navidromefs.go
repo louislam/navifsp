@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/winfsp/go-winfsp/gofs"
@@ -29,6 +30,7 @@ type NavidromeFS struct {
 	cacheDir      string
 	coverCacheDir string
 	startTime     time.Time
+	coverMemCache sync.Map
 }
 
 func NewNavidromeFS(client *subsonicClient, musicCacheDir string, coverCacheDir string) *NavidromeFS {
@@ -124,21 +126,25 @@ func (fs *NavidromeFS) Stat(name string) (os.FileInfo, error) {
 	}
 
 	if len(parts) == 3 && parts[2] == CoverArtName {
+		albumID := parts[1]
 		albums, err := fs.client.getAlbums(context.Background(), parts[0])
 		if err != nil {
 			return nil, err
 		}
 		for _, al := range albums {
-			if al.ID == parts[1] {
+			if al.ID == albumID {
 				var size int64
-				if fs.coverCacheDir != "" {
-					if data, ok := fs.readCoverCache(parts[1]); ok {
+				if cached, ok := fs.coverMemCache.Load(albumID); ok {
+					size = int64(len(cached.([]byte)))
+				} else if fs.coverCacheDir != "" {
+					if data, ok := fs.readCoverCache(albumID); ok {
+						fs.coverMemCache.Store(albumID, data)
 						size = int64(len(data))
 					} else {
-						size, _ = fs.client.getCoverArtSize(context.Background(), parts[1])
+						size, _ = fs.client.getCoverArtSize(context.Background(), albumID)
 					}
 				} else {
-					size, _ = fs.client.getCoverArtSize(context.Background(), parts[1])
+					size, _ = fs.client.getCoverArtSize(context.Background(), albumID)
 				}
 				return &navFileInfo{name: CoverArtName, size: size, modTime: fs.startTime, isDir: false}, nil
 			}
@@ -226,26 +232,32 @@ func (fs *NavidromeFS) OpenFile(name string, flag int, perm os.FileMode) (gofs.F
 			entries = append(entries, &navFileInfo{name: fileName, size: s.Size, modTime: parseTime(s.Created), isDir: false})
 		}
 		var coverSize int64
-		if fs.coverCacheDir != "" {
-			if data, ok := fs.readCoverCache(parts[1]); ok {
+		albumID := parts[1]
+		if cached, ok := fs.coverMemCache.Load(albumID); ok {
+			coverSize = int64(len(cached.([]byte)))
+		} else if fs.coverCacheDir != "" {
+			if data, ok := fs.readCoverCache(albumID); ok {
+				fs.coverMemCache.Store(albumID, data)
 				coverSize = int64(len(data))
 			} else {
-				rc, err := fs.client.getCoverArt(context.Background(), parts[1])
+				rc, err := fs.client.getCoverArt(context.Background(), albumID)
 				if err == nil {
 					data, readErr := io.ReadAll(rc)
 					rc.Close()
 					if readErr == nil {
-						fs.writeCoverCache(parts[1], data)
+						fs.writeCoverCache(albumID, data)
+						fs.coverMemCache.Store(albumID, data)
 						coverSize = int64(len(data))
 					}
 				}
 			}
 		} else {
-			rc, err := fs.client.getCoverArt(context.Background(), parts[1])
+			rc, err := fs.client.getCoverArt(context.Background(), albumID)
 			if err == nil {
 				data, readErr := io.ReadAll(rc)
 				rc.Close()
 				if readErr == nil {
+					fs.coverMemCache.Store(albumID, data)
 					coverSize = int64(len(data))
 				}
 			}
@@ -256,15 +268,27 @@ func (fs *NavidromeFS) OpenFile(name string, flag int, perm os.FileMode) (gofs.F
 
 	// Cover file content (stream from Navidrome API or cache) (\<artistID>\<albumID>\cover.jpg)
 	if len(parts) == 3 && parts[2] == CoverArtName {
+		albumID := parts[1]
+
+		// Check in-memory cache first (avoid re-downloading on every OpenFile).
+		if cached, ok := fs.coverMemCache.Load(albumID); ok {
+			data := cached.([]byte)
+			return &navMemFile{
+				reader: bytes.NewReader(data),
+				info:   &navFileInfo{name: CoverArtName, size: int64(len(data)), modTime: fs.startTime, isDir: false},
+			}, nil
+		}
+
 		if fs.coverCacheDir != "" {
-			if data, ok := fs.readCoverCache(parts[1]); ok {
+			if data, ok := fs.readCoverCache(albumID); ok {
+				fs.coverMemCache.Store(albumID, data)
 				return &navMemFile{
 					reader: bytes.NewReader(data),
 					info:   &navFileInfo{name: CoverArtName, size: int64(len(data)), modTime: fs.startTime, isDir: false},
 				}, nil
 			}
 		}
-		rc, err := fs.client.getCoverArt(context.Background(), parts[1])
+		rc, err := fs.client.getCoverArt(context.Background(), albumID)
 		if err != nil {
 			return nil, err
 		}
@@ -273,8 +297,9 @@ func (fs *NavidromeFS) OpenFile(name string, flag int, perm os.FileMode) (gofs.F
 		if err != nil {
 			return nil, fmt.Errorf("reading cover art: %w", err)
 		}
+		fs.coverMemCache.Store(albumID, data)
 		if fs.coverCacheDir != "" {
-			fs.writeCoverCache(parts[1], data)
+			fs.writeCoverCache(albumID, data)
 		}
 		return &navMemFile{
 			reader: bytes.NewReader(data),
