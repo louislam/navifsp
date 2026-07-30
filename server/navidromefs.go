@@ -9,12 +9,30 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/winfsp/go-winfsp/gofs"
 )
+
+var (
+	lastFreeMemMu   sync.Mutex
+	lastFreeMemTime time.Time
+)
+
+// maybeFreeOSMemory asks the Go runtime to return freed heap memory to the OS,
+// throttled so a burst of cache expirations does not trigger repeated GCs.
+func maybeFreeOSMemory() {
+	lastFreeMemMu.Lock()
+	defer lastFreeMemMu.Unlock()
+	if time.Since(lastFreeMemTime) < 5*time.Second {
+		return
+	}
+	lastFreeMemTime = time.Now()
+	debug.FreeOSMemory()
+}
 
 var verbose bool
 
@@ -89,6 +107,31 @@ func (fs *NavidromeFS) writeCoverCache(albumID string, data []byte) {
 	os.WriteFile(fs.coverCachePath(albumID), data, 0644)
 }
 
+func (fs *NavidromeFS) readCoverMemCache(albumID string) ([]byte, bool) {
+	val, ok := fs.coverMemCache.Load(albumID)
+	if !ok {
+		return nil, false
+	}
+	entry := val.(*memCacheEntry)
+	if time.Now().After(entry.expiresAt) {
+		fs.coverMemCache.Delete(albumID)
+		return nil, false
+	}
+	return entry.data, true
+}
+
+func (fs *NavidromeFS) writeCoverMemCache(albumID string, data []byte) {
+	entry := &memCacheEntry{
+		data:      data,
+		expiresAt: time.Now().Add(memCacheTTL),
+	}
+	entry.timer = time.AfterFunc(memCacheTTL, func() {
+		fs.coverMemCache.CompareAndDelete(albumID, entry)
+		maybeFreeOSMemory()
+	})
+	fs.coverMemCache.Store(albumID, entry)
+}
+
 func (fs *NavidromeFS) Stat(name string) (os.FileInfo, error) {
 	debugLog("Stat(%q)", name)
 	parts := parsePathParts(name)
@@ -135,11 +178,11 @@ func (fs *NavidromeFS) Stat(name string) (os.FileInfo, error) {
 		for _, al := range albums {
 			if al.ID == albumID {
 				var size int64
-				if cached, ok := fs.coverMemCache.Load(albumID); ok {
-					size = int64(len(cached.([]byte)))
+				if data, ok := fs.readCoverMemCache(albumID); ok {
+					size = int64(len(data))
 				} else if fs.coverCacheDir != "" {
 					if data, ok := fs.readCoverCache(albumID); ok {
-						fs.coverMemCache.Store(albumID, data)
+						fs.writeCoverMemCache(albumID, data)
 						size = int64(len(data))
 					} else {
 						size, _ = fs.client.getCoverArtSize(context.Background(), albumID)
@@ -234,11 +277,11 @@ func (fs *NavidromeFS) OpenFile(name string, flag int, perm os.FileMode) (gofs.F
 		}
 		var coverSize int64
 		albumID := parts[1]
-		if cached, ok := fs.coverMemCache.Load(albumID); ok {
-			coverSize = int64(len(cached.([]byte)))
+		if data, ok := fs.readCoverMemCache(albumID); ok {
+			coverSize = int64(len(data))
 		} else if fs.coverCacheDir != "" {
 			if data, ok := fs.readCoverCache(albumID); ok {
-				fs.coverMemCache.Store(albumID, data)
+				fs.writeCoverMemCache(albumID, data)
 				coverSize = int64(len(data))
 			} else {
 				rc, err := fs.client.getCoverArt(context.Background(), albumID)
@@ -247,7 +290,7 @@ func (fs *NavidromeFS) OpenFile(name string, flag int, perm os.FileMode) (gofs.F
 					rc.Close()
 					if readErr == nil {
 						fs.writeCoverCache(albumID, data)
-						fs.coverMemCache.Store(albumID, data)
+						fs.writeCoverMemCache(albumID, data)
 						coverSize = int64(len(data))
 					}
 				}
@@ -258,7 +301,7 @@ func (fs *NavidromeFS) OpenFile(name string, flag int, perm os.FileMode) (gofs.F
 				data, readErr := io.ReadAll(rc)
 				rc.Close()
 				if readErr == nil {
-					fs.coverMemCache.Store(albumID, data)
+					fs.writeCoverMemCache(albumID, data)
 					coverSize = int64(len(data))
 				}
 			}
@@ -272,8 +315,7 @@ func (fs *NavidromeFS) OpenFile(name string, flag int, perm os.FileMode) (gofs.F
 		albumID := parts[1]
 
 		// Check in-memory cache first (avoid re-downloading on every OpenFile).
-		if cached, ok := fs.coverMemCache.Load(albumID); ok {
-			data := cached.([]byte)
+		if data, ok := fs.readCoverMemCache(albumID); ok {
 			return &navMemFile{
 				reader: bytes.NewReader(data),
 				info:   &navFileInfo{name: CoverArtName, size: int64(len(data)), modTime: fs.startTime, isDir: false},
@@ -282,7 +324,7 @@ func (fs *NavidromeFS) OpenFile(name string, flag int, perm os.FileMode) (gofs.F
 
 		if fs.coverCacheDir != "" {
 			if data, ok := fs.readCoverCache(albumID); ok {
-				fs.coverMemCache.Store(albumID, data)
+				fs.writeCoverMemCache(albumID, data)
 				return &navMemFile{
 					reader: bytes.NewReader(data),
 					info:   &navFileInfo{name: CoverArtName, size: int64(len(data)), modTime: fs.startTime, isDir: false},
@@ -298,7 +340,7 @@ func (fs *NavidromeFS) OpenFile(name string, flag int, perm os.FileMode) (gofs.F
 		if err != nil {
 			return nil, fmt.Errorf("reading cover art: %w", err)
 		}
-		fs.coverMemCache.Store(albumID, data)
+		fs.writeCoverMemCache(albumID, data)
 		if fs.coverCacheDir != "" {
 			fs.writeCoverCache(albumID, data)
 		}

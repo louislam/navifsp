@@ -15,6 +15,17 @@ const CoverArtName = "cover.jpg"
 
 const fetchChunkSize = int64(256 * 1024)
 
+// memCacheTTL keeps in-memory cover/chunk data just long enough to coalesce
+// the bursts of redundant reads a single user action triggers.
+const memCacheTTL = 1 * time.Second
+
+// memCacheEntry is a short-lived in-memory cache entry with expiration.
+type memCacheEntry struct {
+	data      []byte
+	expiresAt time.Time
+	timer     *time.Timer
+}
+
 var errReadOnly = syscall.EPERM
 
 // navFileInfo implements os.FileInfo for virtual filesystem entries.
@@ -203,7 +214,12 @@ func (r *readSeeker) readChunkFromMem(chunkStart int64) ([]byte, bool) {
 	if !ok {
 		return nil, false
 	}
-	return val.([]byte), true
+	entry := val.(*memCacheEntry)
+	if time.Now().After(entry.expiresAt) {
+		r.chunkMemCache.Delete(key)
+		return nil, false
+	}
+	return entry.data, true
 }
 
 func (r *readSeeker) writeChunkToMem(chunkStart int64, data []byte) {
@@ -211,7 +227,15 @@ func (r *readSeeker) writeChunkToMem(chunkStart int64, data []byte) {
 		return
 	}
 	key := fmt.Sprintf("%s:%d", r.songID, chunkStart)
-	r.chunkMemCache.Store(key, data)
+	entry := &memCacheEntry{
+		data:      data,
+		expiresAt: time.Now().Add(memCacheTTL),
+	}
+	entry.timer = time.AfterFunc(memCacheTTL, func() {
+		r.chunkMemCache.CompareAndDelete(key, entry)
+		maybeFreeOSMemory()
+	})
+	r.chunkMemCache.Store(key, entry)
 }
 
 func (r *readSeeker) Seek(offset int64, whence int) (int64, error) {
