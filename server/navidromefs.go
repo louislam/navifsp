@@ -27,7 +27,7 @@ var (
 func maybeFreeOSMemory() {
 	lastFreeMemMu.Lock()
 	defer lastFreeMemMu.Unlock()
-	if time.Since(lastFreeMemTime) < 5*time.Second {
+	if time.Since(lastFreeMemTime) < time.Second {
 		return
 	}
 	lastFreeMemTime = time.Now()
