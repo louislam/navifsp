@@ -72,14 +72,14 @@ func parsePathParts(p string) []string {
 
 func parseTime(s string) time.Time {
 	if s == "" {
-		return time.Now()
+		return time.Unix(0, 0)
 	}
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
 		t, err = time.Parse("2006-01-02T15:04:05", s)
 	}
 	if err != nil {
-		return time.Now()
+		return time.Unix(0, 0)
 	}
 	return t
 }
@@ -132,6 +132,40 @@ func (fs *NavidromeFS) writeCoverMemCache(albumID string, data []byte) {
 	fs.coverMemCache.Store(albumID, entry)
 }
 
+// coverSize reports the byte size of an album's cover art using the cheapest
+// available source. The full image is only downloaded when a HEAD request
+// cannot provide a size (e.g. servers that do not respond to HEAD), in which
+// case the result is cached.
+func (fs *NavidromeFS) coverSize(ctx context.Context, albumID string) int64 {
+	if data, ok := fs.readCoverMemCache(albumID); ok {
+		return int64(len(data))
+	}
+	if fs.coverCacheDir != "" {
+		if data, ok := fs.readCoverCache(albumID); ok {
+			fs.writeCoverMemCache(albumID, data)
+			return int64(len(data))
+		}
+	}
+	size, err := fs.client.getCoverArtSize(ctx, albumID)
+	if err == nil && size >= 0 {
+		return size
+	}
+	rc, err := fs.client.getCoverArt(ctx, albumID)
+	if err != nil {
+		return 0
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return 0
+	}
+	fs.writeCoverMemCache(albumID, data)
+	if fs.coverCacheDir != "" {
+		fs.writeCoverCache(albumID, data)
+	}
+	return int64(len(data))
+}
+
 func (fs *NavidromeFS) Stat(name string) (os.FileInfo, error) {
 	debugLog("Stat(%q)", name)
 	parts := parsePathParts(name)
@@ -177,19 +211,7 @@ func (fs *NavidromeFS) Stat(name string) (os.FileInfo, error) {
 		}
 		for _, al := range albums {
 			if al.ID == albumID {
-				var size int64
-				if data, ok := fs.readCoverMemCache(albumID); ok {
-					size = int64(len(data))
-				} else if fs.coverCacheDir != "" {
-					if data, ok := fs.readCoverCache(albumID); ok {
-						fs.writeCoverMemCache(albumID, data)
-						size = int64(len(data))
-					} else {
-						size, _ = fs.client.getCoverArtSize(context.Background(), albumID)
-					}
-				} else {
-					size, _ = fs.client.getCoverArtSize(context.Background(), albumID)
-				}
+				size := fs.coverSize(context.Background(), albumID)
 				return &navFileInfo{name: CoverArtName, size: size, modTime: fs.startTime, isDir: false}, nil
 			}
 		}
@@ -275,37 +297,7 @@ func (fs *NavidromeFS) OpenFile(name string, flag int, perm os.FileMode) (gofs.F
 			fileName := s.ID + ext
 			entries = append(entries, &navFileInfo{name: fileName, size: s.Size, modTime: parseTime(s.Created), isDir: false})
 		}
-		var coverSize int64
-		albumID := parts[1]
-		if data, ok := fs.readCoverMemCache(albumID); ok {
-			coverSize = int64(len(data))
-		} else if fs.coverCacheDir != "" {
-			if data, ok := fs.readCoverCache(albumID); ok {
-				fs.writeCoverMemCache(albumID, data)
-				coverSize = int64(len(data))
-			} else {
-				rc, err := fs.client.getCoverArt(context.Background(), albumID)
-				if err == nil {
-					data, readErr := io.ReadAll(rc)
-					rc.Close()
-					if readErr == nil {
-						fs.writeCoverCache(albumID, data)
-						fs.writeCoverMemCache(albumID, data)
-						coverSize = int64(len(data))
-					}
-				}
-			}
-		} else {
-			rc, err := fs.client.getCoverArt(context.Background(), albumID)
-			if err == nil {
-				data, readErr := io.ReadAll(rc)
-				rc.Close()
-				if readErr == nil {
-					fs.writeCoverMemCache(albumID, data)
-					coverSize = int64(len(data))
-				}
-			}
-		}
+		coverSize := fs.coverSize(context.Background(), parts[1])
 		entries = append(entries, &navFileInfo{name: CoverArtName, size: coverSize, modTime: fs.startTime, isDir: false})
 		return &navDir{entries: entries, info: &navFileInfo{name: parts[1], isDir: true, modTime: time.Now()}}, nil
 	}

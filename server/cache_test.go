@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -176,4 +177,44 @@ func TestCache(t *testing.T) {
 		t.Logf("  .idx size: %d bytes (3 entries)", idxFi.Size())
 		t.Logf("  Overhead: %.4f%%", float64(idxFi.Size())/float64(len(original))*100)
 	})
+}
+
+func TestCacheConcurrentWritesDistinctOffsets(t *testing.T) {
+	cleanup()
+	const song = "concurrent_song"
+	const chunkSize = 4096
+	const numChunks = 128
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < numChunks; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			CacheChunk(song, i*chunkSize, bytes.Repeat([]byte{byte(i)}, chunkSize), testCacheDir)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	idx := readIndex(song, testCacheDir)
+	if idx == nil {
+		t.Fatal("expected index to exist")
+	}
+	if len(idx.Entries) != numChunks {
+		t.Fatalf("expected %d entries, got %d (lost updates under concurrent writes)", numChunks, len(idx.Entries))
+	}
+
+	for i := 0; i < numChunks; i++ {
+		startOff := i * chunkSize
+		got, err := ReadCachedRange(song, startOff, startOff+chunkSize-1, testCacheDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := bytes.Repeat([]byte{byte(i)}, chunkSize)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("chunk %d corrupted (offset collision under concurrent writes)", i)
+		}
+	}
 }

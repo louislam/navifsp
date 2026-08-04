@@ -116,9 +116,14 @@ func (r *readSeeker) Read(p []byte) (int, error) {
 		return 0, fmt.Errorf("reading range: %w", err)
 	}
 
-	r.writeChunkToMem(chunkStart, data)
-	if r.cacheDir != "" {
-		CacheChunk(r.songID, int(chunkStart), data, r.cacheDir)
+	// Only cache responses that match the requested range exactly. A shorter
+	// body (server error page, truncated stream) must not be stored as a valid
+	// chunk or it would poison the cache with corrupt audio data.
+	if int64(len(data)) == chunkEnd-chunkStart+1 {
+		r.writeChunkToMem(chunkStart, data)
+		if r.cacheDir != "" {
+			CacheChunk(r.songID, int(chunkStart), data, r.cacheDir)
+		}
 	}
 
 	off := r.pos - chunkStart
@@ -188,9 +193,14 @@ func (r *readSeeker) ReadAt(p []byte, off int64) (int, error) {
 		return 0, fmt.Errorf("reading range: %w", err)
 	}
 
-	r.writeChunkToMem(chunkStart, data)
-	if r.cacheDir != "" {
-		CacheChunk(r.songID, int(chunkStart), data, r.cacheDir)
+	// Only cache responses that match the requested range exactly. A shorter
+	// body (server error page, truncated stream) must not be stored as a valid
+	// chunk or it would poison the cache with corrupt audio data.
+	if int64(len(data)) == chunkEnd-chunkStart+1 {
+		r.writeChunkToMem(chunkStart, data)
+		if r.cacheDir != "" {
+			CacheChunk(r.songID, int(chunkStart), data, r.cacheDir)
+		}
 	}
 
 	relOff := off - chunkStart
