@@ -1,4 +1,4 @@
-module foo_navifsp
+module navifsp
 
 go 1.26
 

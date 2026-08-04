@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -812,5 +815,242 @@ func TestGetAlbumsIncludesMatchingArtistId(t *testing.T) {
 	}
 	if len(albums) != 2 {
 		t.Fatalf("expected 2 albums (no artistId mismatch), got %d", len(albums))
+	}
+}
+
+func TestStreamSongRangeRejectsErrorStatus(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rest/stream", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "server error", http.StatusInternalServerError)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	client := newSubsonicClient(srv.URL, "user", "pass")
+	body, err := client.streamSongRange(context.Background(), "song1", 0, 1023)
+	if err == nil {
+		if body != nil {
+			body.Close()
+		}
+		t.Fatal("expected error for 500 stream response, got nil")
+	}
+}
+
+func TestGetCoverArtRejectsErrorStatus(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rest/getCoverArt", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "server error", http.StatusInternalServerError)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	client := newSubsonicClient(srv.URL, "user", "pass")
+	body, err := client.getCoverArt(context.Background(), "album1")
+	if err == nil {
+		if body != nil {
+			body.Close()
+		}
+		t.Fatal("expected error for 500 cover response, got nil")
+	}
+}
+
+func TestCoverArtNotCachedOnServerError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rest/getCoverArt", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "server error", http.StatusInternalServerError)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	client := newSubsonicClient(srv.URL, "user", "pass")
+	cacheDir := t.TempDir()
+	fs := NewNavidromeFS(client, "", cacheDir)
+
+	_, err := fs.OpenFile("artist1/album1/cover.jpg", os.O_RDONLY, 0)
+	if err == nil {
+		t.Fatal("expected error opening cover when server returns 500")
+	}
+	if _, statErr := os.Stat(fs.coverCachePath("album1")); statErr == nil {
+		t.Fatal("error body must not be written to the cover cache")
+	}
+}
+
+func TestSongChunkNotCachedOnServerError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rest/getAlbum", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{
+			"subsonic-response": {
+				"status": "ok",
+				"album": {
+					"id": "album1",
+					"name": "Test Album",
+					"song": [
+						{"id": "song1", "path": "/music/song1.flac", "size": 102400, "contentType": "audio/flac", "created": "2019-06-20T14:00:00Z"}
+					]
+				}
+			}
+		}`))
+	})
+	mux.HandleFunc("/rest/stream", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "server error", http.StatusInternalServerError)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	client := newSubsonicClient(srv.URL, "user", "pass")
+	cacheDir := t.TempDir()
+	fs := NewNavidromeFS(client, cacheDir, "")
+
+	f, err := fs.OpenFile("artist1/album1/song1.flac", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	buf := make([]byte, 1024)
+	if _, err := f.ReadAt(buf, 0); err == nil {
+		t.Fatal("expected error reading song chunk when server returns 500")
+	}
+
+	if n := cacheEntryCount(&fs.chunkMemCache); n != 0 {
+		t.Fatalf("error body cached in memory (%d entries)", n)
+	}
+	if _, statErr := os.Stat(filepath.Join(cacheDir, "song1.dat")); statErr == nil {
+		t.Fatal("error body must not be written to the disk chunk cache")
+	}
+}
+
+func TestParseTimeEmptyReturnsStableValue(t *testing.T) {
+	a := parseTime("")
+	time.Sleep(time.Millisecond)
+	b := parseTime("")
+	if !a.Equal(b) {
+		t.Fatalf("parseTime(\"\") must return a stable value, got %v then %v", a, b)
+	}
+	if want := time.Unix(0, 0); !a.Equal(want) {
+		t.Fatalf("parseTime(\"\") = %v, want %v", a, want)
+	}
+
+	c := parseTime("not-a-date")
+	time.Sleep(time.Millisecond)
+	d := parseTime("not-a-date")
+	if !c.Equal(d) {
+		t.Fatalf("parseTime(invalid) must return a stable value, got %v then %v", c, d)
+	}
+	if !c.Equal(time.Unix(0, 0)) {
+		t.Fatalf("parseTime(invalid) = %v, want 1970-01-01", c)
+	}
+}
+
+func TestGetSongIsCached(t *testing.T) {
+	var songRequests int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rest/getSong", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&songRequests, 1)
+		w.Write([]byte(`{"subsonic-response":{"status":"ok","song":{"id":"song1","path":"/music/song1.flac","size":1024,"contentType":"audio/flac","created":"2020-01-01T00:00:00Z"}}}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	client := newSubsonicClient(srv.URL, "user", "pass")
+
+	for i := 0; i < 2; i++ {
+		s, err := client.getSong(context.Background(), "song1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.ID != "song1" {
+			t.Fatalf("unexpected song: %+v", s)
+		}
+	}
+	if n := atomic.LoadInt32(&songRequests); n != 1 {
+		t.Fatalf("expected getSong to be cached, got %d HTTP requests", n)
+	}
+}
+
+func TestAlbumListingCoverSizeUsesHeadNotFullDownload(t *testing.T) {
+	const headSize = 54321
+	var coverGets, coverHeads int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rest/getArtist", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"subsonic-response":{"status":"ok","artist":{"id":"artist1","name":"Artist One","album":[{"id":"album1","name":"Album A","artistId":"artist1","created":"2020-01-01T00:00:00Z"}]}}}`))
+	})
+	mux.HandleFunc("/rest/getAlbum", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"subsonic-response":{"status":"ok","album":{"id":"album1","name":"Album A","song":[{"id":"song1","path":"/music/song1.flac","size":1024,"contentType":"audio/flac","created":"2019-06-20T14:00:00Z"}]}}}`))
+	})
+	mux.HandleFunc("/rest/getCoverArt", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			atomic.AddInt32(&coverHeads, 1)
+			w.Header().Set("Content-Length", strconv.Itoa(headSize))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		atomic.AddInt32(&coverGets, 1)
+		w.Write(bytes.Repeat([]byte{0xff}, 300))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	client := newSubsonicClient(srv.URL, "user", "pass")
+	fs := NewNavidromeFS(client, "", "")
+
+	f, err := fs.OpenFile("artist1/album1", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	entries, err := f.Readdir(-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var coverSize int64 = -1
+	for _, e := range entries {
+		if e.Name() == CoverArtName {
+			coverSize = e.Size()
+			break
+		}
+	}
+	if coverSize != headSize {
+		t.Fatalf("expected cover size %d from HEAD, got %d", headSize, coverSize)
+	}
+	if n := atomic.LoadInt32(&coverGets); n != 0 {
+		t.Fatalf("album listing must not download the full cover, got %d GETs", n)
+	}
+	if n := atomic.LoadInt32(&coverHeads); n != 1 {
+		t.Fatalf("expected 1 HEAD for cover size, got %d", n)
+	}
+}
+
+func TestCoverStatSizeFallsBackWhenHeadFails(t *testing.T) {
+	fakeJPEG := bytes.Repeat([]byte{0xff}, 512)
+	var coverGets int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rest/getArtist", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"subsonic-response":{"status":"ok","artist":{"id":"artist1","name":"Artist One","album":[{"id":"album1","name":"Album A","artistId":"artist1","created":"2020-01-01T00:00:00Z"}]}}}`))
+	})
+	mux.HandleFunc("/rest/getCoverArt", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			http.Error(w, "no head support", http.StatusInternalServerError)
+			return
+		}
+		atomic.AddInt32(&coverGets, 1)
+		w.Write(fakeJPEG)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	client := newSubsonicClient(srv.URL, "user", "pass")
+	fs := NewNavidromeFS(client, "", "")
+
+	info, err := fs.Stat("artist1/album1/cover.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != int64(len(fakeJPEG)) {
+		t.Fatalf("expected cover size %d from fallback GET, got %d", len(fakeJPEG), info.Size())
+	}
+	if n := atomic.LoadInt32(&coverGets); n != 1 {
+		t.Fatalf("expected exactly 1 fallback GET, got %d", n)
 	}
 }

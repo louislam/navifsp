@@ -5,7 +5,18 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 )
+
+// cacheLocks serializes read-modify-write cycles of a cache file, keyed by the
+// song id. Without it, concurrent CacheChunk calls for the same song could
+// record the same .dat offset and overwrite each other's index entry.
+var cacheLocks sync.Map // filename -> *sync.RWMutex
+
+func cacheLock(filename string) *sync.RWMutex {
+	v, _ := cacheLocks.LoadOrStore(filename, &sync.RWMutex{})
+	return v.(*sync.RWMutex)
+}
 
 type CacheEntry struct {
 	Start     int   `json:"start"`
@@ -23,6 +34,9 @@ type CacheIndex struct {
 
 func ReadSongMeta(filename, cacheDir string) (size int64, mime, created string, ok bool) {
 	cacheDir = cacheDirPath(cacheDir)
+	mu := cacheLock(filename)
+	mu.RLock()
+	defer mu.RUnlock()
 	idx := readIndex(filename, cacheDir)
 	if idx == nil || idx.FullSize == 0 {
 		return 0, "", "", false
@@ -33,6 +47,9 @@ func ReadSongMeta(filename, cacheDir string) (size int64, mime, created string, 
 func SaveSongMeta(filename string, size int64, mime, created, cacheDir string) error {
 	cacheDir = cacheDirPath(cacheDir)
 	os.MkdirAll(cacheDir, 0755)
+	mu := cacheLock(filename)
+	mu.Lock()
+	defer mu.Unlock()
 	idx := readIndex(filename, cacheDir)
 	if idx != nil {
 		if idx.FullSize == size && idx.MIMEType == mime && idx.Created == created {
@@ -48,6 +65,9 @@ func SaveSongMeta(filename string, size int64, mime, created, cacheDir string) e
 
 func deleteCachedFiles(filename, cacheDir string) {
 	cacheDir = cacheDirPath(cacheDir)
+	mu := cacheLock(filename)
+	mu.Lock()
+	defer mu.Unlock()
 	os.Remove(idxPath(filename, cacheDir))
 	os.Remove(datPath(filename, cacheDir))
 }
@@ -91,6 +111,10 @@ func CacheChunk(filename string, start int, data []byte, cacheDir string) error 
 	cacheDir = cacheDirPath(cacheDir)
 	os.MkdirAll(cacheDir, 0755)
 
+	mu := cacheLock(filename)
+	mu.Lock()
+	defer mu.Unlock()
+
 	idx := readIndex(filename, cacheDir)
 	if idx == nil {
 		idx = &CacheIndex{FullSize: int64(0), MIMEType: ""}
@@ -130,6 +154,10 @@ func CacheChunk(filename string, start int, data []byte, cacheDir string) error 
 
 func ReadCachedRange(filename string, start, end int, cacheDir string) ([]byte, error) {
 	cacheDir = cacheDirPath(cacheDir)
+
+	mu := cacheLock(filename)
+	mu.RLock()
+	defer mu.RUnlock()
 
 	idx := readIndex(filename, cacheDir)
 	if idx == nil {
