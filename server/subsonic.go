@@ -39,7 +39,7 @@ func newSubsonicClient(baseURL, username, password string) *subsonicClient {
 		baseURL:  baseURL,
 		username: username,
 		password: password,
-		client:   &http.Client{Transport: transport},
+		client:   &http.Client{Transport: transport, Timeout: 60 * time.Second},
 		cache:    cache.New(10*time.Second, 30*time.Second),
 	}
 }
@@ -89,6 +89,9 @@ func (c *subsonicClient) doRequest(ctx context.Context, url string) ([]byte, err
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("request failed: unexpected status %d", resp.StatusCode)
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
@@ -105,6 +108,10 @@ func (c *subsonicClient) doStream(ctx context.Context, url string) (io.ReadClose
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("stream request failed: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		resp.Body.Close()
+		return nil, fmt.Errorf("stream request failed: unexpected status %d", resp.StatusCode)
 	}
 	return resp.Body, nil
 }
@@ -261,6 +268,14 @@ func (c *subsonicClient) getSongs(ctx context.Context, albumID string) ([]song, 
 }
 
 func (c *subsonicClient) getSong(ctx context.Context, songID string) (*song, error) {
+	cacheKey := "song:" + songID
+
+	if cached, found := c.cache.Get(cacheKey); found {
+		debugLog("getSong(%s): cache hit", songID)
+		return cached.(*song), nil
+	}
+
+	debugLog("getSong(%s): cache miss, fetching from server", songID)
 	body, err := c.doRequest(ctx, c.buildURL("getSong", map[string]string{"id": songID}))
 	if err != nil {
 		return nil, err
@@ -276,7 +291,9 @@ func (c *subsonicClient) getSong(ctx context.Context, songID string) (*song, err
 		return nil, fmt.Errorf("song not found: %s", songID)
 	}
 	s := resp.SubsonicResponse.Song
-	return &song{ID: s.ID, Path: s.Path, Size: s.Size, ContentType: s.ContentType, Created: s.Created}, nil
+	result := &song{ID: s.ID, Path: s.Path, Size: s.Size, ContentType: s.ContentType, Created: s.Created}
+	c.cache.Set(cacheKey, result, cache.DefaultExpiration)
+	return result, nil
 }
 
 func (c *subsonicClient) streamSong(ctx context.Context, songID string) (io.ReadCloser, error) {
@@ -298,6 +315,12 @@ func (c *subsonicClient) getCoverArtSize(ctx context.Context, id string) (int64,
 		return 0, fmt.Errorf("HEAD request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("HEAD request failed: unexpected status %d", resp.StatusCode)
+	}
+	if resp.ContentLength < 0 {
+		return 0, fmt.Errorf("HEAD request failed: no content length")
+	}
 	return resp.ContentLength, nil
 }
 
@@ -312,6 +335,10 @@ func (c *subsonicClient) streamSongRange(ctx context.Context, songID string, sta
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("range request failed: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		resp.Body.Close()
+		return nil, fmt.Errorf("range request failed: unexpected status %d", resp.StatusCode)
 	}
 	return resp.Body, nil
 }
