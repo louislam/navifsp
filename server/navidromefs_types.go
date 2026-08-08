@@ -64,155 +64,123 @@ func (r *readSeeker) Read(p []byte) (int, error) {
 	if r.pos >= r.fileSize {
 		return 0, io.EOF
 	}
-
-	end := r.pos + int64(len(p))
-	if end > r.fileSize {
-		end = r.fileSize
-	}
-
-	chunkStart := r.pos - (r.pos % fetchChunkSize)
-	chunkEnd := chunkStart + fetchChunkSize - 1
-	if chunkEnd >= r.fileSize {
-		chunkEnd = r.fileSize - 1
-	}
-
-	if r.cacheDir != "" && chunkStart >= 0 {
-		cached, err := ReadCachedRange(r.songID, int(chunkStart), int(chunkEnd), r.cacheDir)
-		if err == nil && cached != nil {
-			off := int(r.pos - chunkStart)
-			n := int(end - r.pos)
-			if off+n > len(cached) {
-				n = len(cached) - off
-			}
-			if n > 0 {
-				copy(p, cached[off:off+n])
-				r.pos += int64(n)
-				return n, nil
-			}
-		}
-	}
-
-	if data, ok := r.readChunkFromMem(chunkStart); ok {
-		off := int(r.pos - chunkStart)
-		n := int(end - r.pos)
-		if off+n > len(data) {
-			n = len(data) - off
-		}
-		if n > 0 {
-			copy(p, data[off:off+n])
-			r.pos += int64(n)
-			return n, nil
-		}
-	}
-
-	debugLog("Fetch %s %d-%d", r.songID, chunkStart, chunkEnd)
-	body, err := r.client.streamSongRange(r.ctx, r.songID, chunkStart, chunkEnd)
-	if err != nil {
-		return 0, fmt.Errorf("fetching range: %w", err)
-	}
-	defer body.Close()
-	data, err := io.ReadAll(body)
-	if err != nil {
-		return 0, fmt.Errorf("reading range: %w", err)
-	}
-
-	// Only cache responses that match the requested range exactly. A shorter
-	// body (server error page, truncated stream) must not be stored as a valid
-	// chunk or it would poison the cache with corrupt audio data.
-	if int64(len(data)) == chunkEnd-chunkStart+1 {
-		r.writeChunkToMem(chunkStart, data)
-		if r.cacheDir != "" {
-			CacheChunk(r.songID, int(chunkStart), data, r.cacheDir)
-		}
-	}
-
-	off := r.pos - chunkStart
-	n := int(end - r.pos)
-	if off+int64(n) > int64(len(data)) {
-		n = int(int64(len(data)) - off)
-	}
-	if n <= 0 {
-		return 0, io.EOF
-	}
-	copy(p, data[off:off+int64(n)])
+	n, err := r.ReadAt(p, r.pos)
 	r.pos += int64(n)
-	return n, nil
+	if n > 0 && err == io.EOF {
+		return n, nil
+	}
+	return n, err
 }
 
+// ReadAt fills the caller's buffer completely, looping over fetch chunks,
+// because WinFsp passes the result straight to Windows. A short read with a
+// nil error is taken as a full read by the copy engine and the missing bytes
+// are zero-filled, corrupting copied files. Per the io.ReaderAt contract it
+// only returns n < len(p) together with io.EOF (reached the end of the file).
 func (r *readSeeker) ReadAt(p []byte, off int64) (int, error) {
 	if off >= r.fileSize {
 		return 0, io.EOF
 	}
 
-	end := off + int64(len(p))
-	if end > r.fileSize {
-		end = r.fileSize
-	}
+	total := 0
+	for total < len(p) {
+		end := off + int64(len(p)-total)
+		if end > r.fileSize {
+			end = r.fileSize
+		}
+		if end <= off {
+			break
+		}
 
-	chunkStart := off - (off % fetchChunkSize)
-	chunkEnd := chunkStart + fetchChunkSize - 1
-	if chunkEnd >= r.fileSize {
-		chunkEnd = r.fileSize - 1
-	}
+		chunkStart := off - (off % fetchChunkSize)
+		chunkEnd := chunkStart + fetchChunkSize - 1
+		if chunkEnd >= r.fileSize {
+			chunkEnd = r.fileSize - 1
+		}
 
-	if r.cacheDir != "" && chunkStart >= 0 {
-		cached, err := ReadCachedRange(r.songID, int(chunkStart), int(chunkEnd), r.cacheDir)
-		if err == nil && cached != nil {
+		served := false
+
+		if r.cacheDir != "" && chunkStart >= 0 {
+			cached, err := ReadCachedRange(r.songID, int(chunkStart), int(chunkEnd), r.cacheDir)
+			if err == nil && cached != nil {
+				relOff := int(off - chunkStart)
+				n := int(end - off)
+				if relOff+n > len(cached) {
+					n = len(cached) - relOff
+				}
+				if n > 0 {
+					copy(p[total:total+n], cached[relOff:relOff+n])
+					off += int64(n)
+					total += n
+					served = true
+				}
+			}
+		}
+		if served {
+			continue
+		}
+
+		if data, ok := r.readChunkFromMem(chunkStart); ok {
 			relOff := int(off - chunkStart)
 			n := int(end - off)
-			if relOff+n > len(cached) {
-				n = len(cached) - relOff
+			if relOff+n > len(data) {
+				n = len(data) - relOff
 			}
 			if n > 0 {
-				copy(p, cached[relOff:relOff+n])
-				return n, nil
+				copy(p[total:total+n], data[relOff:relOff+n])
+				off += int64(n)
+				total += n
+				continue
 			}
 		}
-	}
 
-	if data, ok := r.readChunkFromMem(chunkStart); ok {
-		relOff := int(off - chunkStart)
+		debugLog("FetchAt %s %d-%d", r.songID, chunkStart, chunkEnd)
+		body, err := r.client.streamSongRange(r.ctx, r.songID, chunkStart, chunkEnd)
+		if err != nil {
+			if total > 0 {
+				return total, io.EOF
+			}
+			return 0, fmt.Errorf("fetching range: %w", err)
+		}
+		data, err := io.ReadAll(body)
+		body.Close()
+		if err != nil {
+			if total > 0 {
+				return total, io.EOF
+			}
+			return 0, fmt.Errorf("reading range: %w", err)
+		}
+
+		// Only cache responses that match the requested range exactly. A shorter
+		// body (server error page, truncated stream) must not be stored as a valid
+		// chunk or it would poison the cache with corrupt audio data.
+		if int64(len(data)) == chunkEnd-chunkStart+1 {
+			r.writeChunkToMem(chunkStart, data)
+			if r.cacheDir != "" {
+				CacheChunk(r.songID, int(chunkStart), data, r.cacheDir)
+			}
+		}
+
+		relOff := off - chunkStart
 		n := int(end - off)
-		if relOff+n > len(data) {
-			n = len(data) - relOff
+		if relOff+int64(n) > int64(len(data)) {
+			n = int(int64(len(data)) - relOff)
 		}
-		if n > 0 {
-			copy(p, data[relOff:relOff+n])
-			return n, nil
+		if n <= 0 {
+			break
 		}
+		copy(p[total:total+n], data[relOff:relOff+int64(n)])
+		off += int64(n)
+		total += n
 	}
 
-	debugLog("FetchAt %s %d-%d", r.songID, chunkStart, chunkEnd)
-	body, err := r.client.streamSongRange(r.ctx, r.songID, chunkStart, chunkEnd)
-	if err != nil {
-		return 0, fmt.Errorf("fetching range: %w", err)
-	}
-	defer body.Close()
-	data, err := io.ReadAll(body)
-	if err != nil {
-		return 0, fmt.Errorf("reading range: %w", err)
-	}
-
-	// Only cache responses that match the requested range exactly. A shorter
-	// body (server error page, truncated stream) must not be stored as a valid
-	// chunk or it would poison the cache with corrupt audio data.
-	if int64(len(data)) == chunkEnd-chunkStart+1 {
-		r.writeChunkToMem(chunkStart, data)
-		if r.cacheDir != "" {
-			CacheChunk(r.songID, int(chunkStart), data, r.cacheDir)
-		}
-	}
-
-	relOff := off - chunkStart
-	n := int(end - off)
-	if relOff+int64(n) > int64(len(data)) {
-		n = int(int64(len(data)) - relOff)
-	}
-	if n <= 0 {
+	if total == 0 {
 		return 0, io.EOF
 	}
-	copy(p, data[relOff:relOff+int64(n)])
-	return n, nil
+	if total < len(p) {
+		return total, io.EOF
+	}
+	return total, nil
 }
 
 func (r *readSeeker) readChunkFromMem(chunkStart int64) ([]byte, bool) {

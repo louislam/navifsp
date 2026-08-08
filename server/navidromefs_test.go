@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -965,6 +966,185 @@ func TestGetSongIsCached(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&songRequests); n != 1 {
 		t.Fatalf("expected getSong to be cached, got %d HTTP requests", n)
+	}
+}
+
+// rangeMockSong returns a mock Subsonic server whose single song is larger
+// than one fetch chunk and is served over Range requests, like Navidrome.
+func rangeMockSong(t *testing.T, size int64) (*subsonicClient, []byte) {
+	t.Helper()
+	src := make([]byte, size)
+	for i := range src {
+		src[i] = byte(i*31 + 7)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rest/getArtist", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"subsonic-response":{"status":"ok","artist":{"id":"artist1","name":"Test Artist","album":[{"id":"album1","name":"Test Album","created":"2020-01-01T00:00:00Z"}]}}}`))
+	})
+	mux.HandleFunc("/rest/getAlbum", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"subsonic-response":{"status":"ok","album":{"id":"album1","name":"Test Album","song":[{"id":"song1","path":"/music/song1.flac","size":` + strconv.FormatInt(size, 10) + `,"contentType":"audio/flac","created":"2019-06-20T14:00:00Z"}]}}}`))
+	})
+	mux.HandleFunc("/rest/stream", func(w http.ResponseWriter, r *http.Request) {
+		rangeHdr := r.Header.Get("Range")
+		if rangeHdr == "" {
+			w.Write(src)
+			return
+		}
+		var start, end int64
+		fmt.Sscanf(rangeHdr, "bytes=%d-%d", &start, &end)
+		if start < 0 || start >= size {
+			http.Error(w, "invalid range", http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		if end >= size {
+			end = size - 1
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, size))
+		w.WriteHeader(http.StatusPartialContent)
+		w.Write(src[start : end+1])
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return newSubsonicClient(srv.URL, "user", "pass"), src
+}
+
+// TestReadAtFillsRequestedBuffer simulates a Windows copy: sequential reads
+// with a buffer spanning multiple chunks. ReadAt must fill the whole buffer
+// (io.ReaderAt contract: n < len(p) requires a non-nil error), otherwise the
+// bytes past the short read end up zero-filled in the copied file.
+func TestReadAtFillsRequestedBuffer(t *testing.T) {
+	size := int64(fetchChunkSize*4 + 12345)
+	client, src := rangeMockSong(t, size)
+	fs := NewNavidromeFS(client, "", "")
+
+	f, err := fs.OpenFile("artist1/album1/song1.flac", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	buf := make([]byte, 1024*1024)
+	var off int64
+	for off < size {
+		n, err := f.ReadAt(buf, off)
+		if n < len(buf) && err == nil {
+			t.Fatalf("ReadAt(%d): short read %d < %d with nil error (corrupts Windows copy)", off, n, len(buf))
+		}
+		if n > 0 {
+			if !bytes.Equal(buf[:n], src[off:off+int64(n)]) {
+				t.Fatalf("ReadAt(%d): data mismatch at offset %d", off, off)
+			}
+			off += int64(n)
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			t.Fatal(err)
+		}
+		if n == 0 {
+			break
+		}
+	}
+	if off != size {
+		t.Fatalf("read %d bytes, want %d", off, size)
+	}
+}
+
+// TestReadFillsRequestedBuffer is the same copy simulation for the sequential
+// Read path (used via Seek+Read by some callers).
+func TestReadFillsRequestedBuffer(t *testing.T) {
+	size := int64(fetchChunkSize*4 + 12345)
+	client, src := rangeMockSong(t, size)
+	fs := NewNavidromeFS(client, "", "")
+
+	f, err := fs.OpenFile("artist1/album1/song1.flac", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, 1024*1024)
+	var off int64
+	for off < size {
+		n, err := f.Read(buf)
+		if n > 0 {
+			if !bytes.Equal(buf[:n], src[off:off+int64(n)]) {
+				t.Fatalf("Read: data mismatch at offset %d", off)
+			}
+			off += int64(n)
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			t.Fatal(err)
+		}
+		if n == 0 {
+			break
+		}
+	}
+	if off != size {
+		t.Fatalf("read %d bytes, want %d", off, size)
+	}
+}
+
+// TestCoverCopySimulation verifies that copying cover.jpg (navMemFile,
+// backed by bytes.Reader) with Windows-style big ReadAt buffers yields
+// byte-identical data, including a buffer larger than the cover itself.
+func TestCoverCopySimulation(t *testing.T) {
+	cover := make([]byte, 1400000) // larger than one 1MB copy buffer
+	for i := range cover {
+		cover[i] = byte(i*13 + 3)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rest/getArtist", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"subsonic-response":{"status":"ok","artist":{"id":"artist1","name":"Test Artist","album":[{"id":"album1","name":"Test Album","created":"2020-01-01T00:00:00Z"}]}}}`))
+	})
+	mux.HandleFunc("/rest/getCoverArt", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(cover)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	client := newSubsonicClient(srv.URL, "user", "pass")
+	fs := NewNavidromeFS(client, "", "")
+
+	f, err := fs.OpenFile("artist1/album1/cover.jpg", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	buf := make([]byte, 1024*1024)
+	var off int64
+	for off < int64(len(cover)) {
+		n, err := f.ReadAt(buf, off)
+		if n < len(buf) && err == nil {
+			t.Fatalf("cover ReadAt(%d): short read %d < %d with nil error (corrupts Windows copy)", off, n, len(buf))
+		}
+		if n > 0 {
+			if !bytes.Equal(buf[:n], cover[off:off+int64(n)]) {
+				t.Fatalf("cover ReadAt(%d): data mismatch at offset %d", off, off)
+			}
+			off += int64(n)
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			t.Fatal(err)
+		}
+		if n == 0 {
+			break
+		}
+	}
+	if off != int64(len(cover)) {
+		t.Fatalf("read %d bytes, want %d", off, len(cover))
 	}
 }
 
