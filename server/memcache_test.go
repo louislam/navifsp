@@ -158,7 +158,7 @@ func TestMemCacheReleasesMemory(t *testing.T) {
 	baseline := currentProcessRSS()
 	t.Logf("Baseline RSS: %d MB", baseline/(1024*1024))
 
-	f, err := fs.OpenFile("artist1/album1/song1.flac", 0, 0)
+	f, err := fs.OpenFile("Test Artist [artist1]/Test Album [album1]/song1 [song1].flac", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

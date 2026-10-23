@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"path"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -177,226 +176,251 @@ func (fs *NavidromeFS) Stat(name string) (os.FileInfo, error) {
 			modTime: fs.startTime}, nil
 	}
 
+	if len(parts) > 3 {
+		return nil, os.ErrNotExist
+	}
+
+	ctx := context.Background()
+	artistID, ok := splitIDName(parts[0])
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+
 	if len(parts) == 1 {
-		artists, err := fs.client.getArtists(context.Background())
+		artists, err := fs.client.getArtists(ctx)
 		if err != nil {
 			return nil, err
 		}
 		for _, a := range artists {
-			if a.ID == parts[0] {
-				return &navFileInfo{name: a.ID, isDir: true, modTime: time.Now()}, nil
+			if a.ID == artistID {
+				return &navFileInfo{name: displayNameWithID(a.Name, a.ID), isDir: true, modTime: fs.startTime}, nil
 			}
 		}
+		return nil, os.ErrNotExist
+	}
+
+	albumID, ok := splitIDName(parts[1])
+	if !ok {
 		return nil, os.ErrNotExist
 	}
 
 	if len(parts) == 2 {
-		albums, err := fs.client.getAlbums(context.Background(), parts[0])
+		album, err := fs.client.getAlbum(ctx, albumID)
 		if err != nil {
 			return nil, err
 		}
-		for _, al := range albums {
-			if al.ID == parts[1] {
-				return &navFileInfo{name: al.ID, isDir: true, modTime: parseTime(al.Created)}, nil
-			}
+		if !albumBelongsToArtist(album, artistID) {
+			return nil, os.ErrNotExist
 		}
-		return nil, os.ErrNotExist
+		return &navFileInfo{name: displayNameWithID(album.Name, album.ID), isDir: true, modTime: parseTime(album.Created)}, nil
 	}
 
-	if len(parts) == 3 && parts[2] == CoverArtName {
-		albumID := parts[1]
-		albums, err := fs.client.getAlbums(context.Background(), parts[0])
+	if parts[2] == CoverArtName {
+		album, err := fs.client.getAlbum(ctx, albumID)
 		if err != nil {
 			return nil, err
 		}
-		for _, al := range albums {
-			if al.ID == albumID {
-				size := fs.coverSize(context.Background(), albumID)
-				return &navFileInfo{name: CoverArtName, size: size, modTime: fs.startTime, isDir: false}, nil
-			}
+		if !albumBelongsToArtist(album, artistID) {
+			return nil, os.ErrNotExist
 		}
-		return nil, os.ErrNotExist
+		size := fs.coverSize(ctx, albumID)
+		return &navFileInfo{name: CoverArtName, size: size, modTime: fs.startTime, isDir: false}, nil
 	}
 
-	if len(parts) == 3 {
-		songID := strings.TrimSuffix(parts[2], path.Ext(parts[2]))
-
-		if size, _, created, ok := ReadSongMeta(songID, fs.cacheDir); ok && fs.cacheDir != "" {
-			apiSong, err := fs.client.getSong(context.Background(), songID)
-			if err == nil && (apiSong.Size != size || apiSong.Created != created) {
-				log.Printf("Cache stale for %s, re-fetching", songID)
-				deleteCachedFiles(songID, fs.cacheDir)
-				SaveSongMeta(songID, apiSong.Size, apiSong.ContentType, apiSong.Created, fs.cacheDir)
-				return &navFileInfo{name: parts[2], size: apiSong.Size, modTime: parseTime(apiSong.Created), isDir: false}, nil
-			}
-			if err == nil {
-				return &navFileInfo{name: parts[2], size: size, modTime: parseTime(created), isDir: false}, nil
-			}
-		}
-
-		songs, err := fs.client.getSongs(context.Background(), parts[1])
-		if err != nil {
-			return nil, err
-		}
-		for _, s := range songs {
-			if s.ID == songID {
-				if fs.cacheDir != "" {
-					SaveSongMeta(songID, s.Size, s.ContentType, s.Created, fs.cacheDir)
-				}
-				return &navFileInfo{name: parts[2], size: s.Size, modTime: parseTime(s.Created), isDir: false}, nil
-			}
-		}
+	songID, _, ok := splitSongFileName(parts[2])
+	if !ok {
 		return nil, os.ErrNotExist
 	}
-
+	album, err := fs.client.getAlbum(ctx, albumID)
+	if err != nil {
+		return nil, err
+	}
+	if !albumBelongsToArtist(album, artistID) {
+		return nil, os.ErrNotExist
+	}
+	multiDisc := isMultiDisc(album.Songs)
+	for _, s := range album.Songs {
+		if s.ID == songID {
+			return &navFileInfo{name: songFileName(s, multiDisc), size: s.Size, modTime: parseTime(s.Created), isDir: false}, nil
+		}
+	}
 	return nil, os.ErrNotExist
 }
 
 func (fs *NavidromeFS) OpenFile(name string, flag int, perm os.FileMode) (gofs.File, error) {
 	debugLog("OpenFile(%q, 0x%x, %v)", name, flag, perm)
 	parts := parsePathParts(name)
+	ctx := context.Background()
 
 	// Root - List artists folder (\)
 	if len(parts) == 0 {
-		artists, err := fs.client.getArtists(context.Background())
+		artists, err := fs.client.getArtists(ctx)
 		if err != nil {
 			return nil, err
 		}
 		entries := make([]os.FileInfo, len(artists))
 		for i, a := range artists {
-			entries[i] = &navFileInfo{name: a.ID, isDir: true, modTime: time.Now()}
+			entries[i] = &navFileInfo{name: displayNameWithID(a.Name, a.ID), isDir: true, modTime: fs.startTime}
 		}
 		return &navDir{entries: entries, info: &navFileInfo{name: "", isDir: true, modTime: fs.startTime}}, nil
 	}
 
+	if len(parts) > 3 {
+		return nil, os.ErrNotExist
+	}
+
+	artistID, ok := splitIDName(parts[0])
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+
 	// Artist folder - List albums (\<artistID>\)
 	if len(parts) == 1 {
-		albums, err := fs.client.getAlbums(context.Background(), parts[0])
+		albums, err := fs.client.getAlbums(ctx, artistID)
 		if err != nil {
 			return nil, err
 		}
 		entries := make([]os.FileInfo, len(albums))
 		for i, al := range albums {
-			entries[i] = &navFileInfo{name: al.ID, isDir: true, modTime: parseTime(al.Created)}
+			entries[i] = &navFileInfo{name: displayNameWithID(al.Name, al.ID), isDir: true, modTime: parseTime(al.Created)}
 		}
-		return &navDir{entries: entries, info: &navFileInfo{name: parts[0], isDir: true, modTime: time.Now()}}, nil
+		return &navDir{entries: entries, info: &navFileInfo{name: parts[0], isDir: true, modTime: fs.startTime}}, nil
+	}
+
+	albumID, ok := splitIDName(parts[1])
+	if !ok {
+		return nil, os.ErrNotExist
 	}
 
 	// Album folder - List songs and cover art (\<artistID>\<albumID>\)
 	if len(parts) == 2 {
-		songs, err := fs.client.getSongs(context.Background(), parts[1])
+		album, err := fs.client.getAlbum(ctx, albumID)
 		if err != nil {
 			return nil, err
 		}
-		entries := make([]os.FileInfo, 0, len(songs)+1)
-		for _, s := range songs {
-			ext := ""
-			if dot := strings.LastIndex(s.Path, "."); dot >= 0 {
-				ext = s.Path[dot:]
-			}
-			fileName := s.ID + ext
-			entries = append(entries, &navFileInfo{name: fileName, size: s.Size, modTime: parseTime(s.Created), isDir: false})
+		if !albumBelongsToArtist(album, artistID) {
+			return nil, os.ErrNotExist
 		}
-		coverSize := fs.coverSize(context.Background(), parts[1])
-		entries = append(entries, &navFileInfo{name: CoverArtName, size: coverSize, modTime: fs.startTime, isDir: false})
-		return &navDir{entries: entries, info: &navFileInfo{name: parts[1], isDir: true, modTime: time.Now()}}, nil
+		multiDisc := isMultiDisc(album.Songs)
+		entries := make([]os.FileInfo, 0, len(album.Songs)+1)
+		for _, s := range album.Songs {
+			entries = append(entries, &navFileInfo{
+				name:    songFileName(s, multiDisc),
+				size:    s.Size,
+				modTime: parseTime(s.Created),
+				isDir:   false,
+			})
+		}
+		entries = append(entries, &navFileInfo{
+			name:    CoverArtName,
+			size:    fs.coverSize(ctx, albumID),
+			modTime: fs.startTime,
+			isDir:   false,
+		})
+		return &navDir{entries: entries, info: &navFileInfo{
+			name:    displayNameWithID(album.Name, album.ID),
+			isDir:   true,
+			modTime: parseTime(album.Created),
+		}}, nil
 	}
 
-	// Cover file content (stream from Navidrome API or cache) (\<artistID>\<albumID>\cover.jpg)
-	if len(parts) == 3 && parts[2] == CoverArtName {
-		albumID := parts[1]
-
-		// Check in-memory cache first (avoid re-downloading on every OpenFile).
-		if data, ok := fs.readCoverMemCache(albumID); ok {
-			return &navMemFile{
-				reader: bytes.NewReader(data),
-				info:   &navFileInfo{name: CoverArtName, size: int64(len(data)), modTime: fs.startTime, isDir: false},
-			}, nil
-		}
-
-		if fs.coverCacheDir != "" {
-			if data, ok := fs.readCoverCache(albumID); ok {
-				fs.writeCoverMemCache(albumID, data)
-				return &navMemFile{
-					reader: bytes.NewReader(data),
-					info:   &navFileInfo{name: CoverArtName, size: int64(len(data)), modTime: fs.startTime, isDir: false},
-				}, nil
-			}
-		}
-		rc, err := fs.client.getCoverArt(context.Background(), albumID)
+	// Cover file content (stream from Navidrome API or cache)
+	if parts[2] == CoverArtName {
+		album, err := fs.client.getAlbum(ctx, albumID)
 		if err != nil {
 			return nil, err
 		}
-		defer rc.Close()
-		data, err := io.ReadAll(rc)
-		if err != nil {
-			return nil, fmt.Errorf("reading cover art: %w", err)
+		if !albumBelongsToArtist(album, artistID) {
+			return nil, os.ErrNotExist
 		}
-		fs.writeCoverMemCache(albumID, data)
-		if fs.coverCacheDir != "" {
-			fs.writeCoverCache(albumID, data)
+		return fs.openCover(ctx, albumID)
+	}
+
+	// Song file content (stream from Navidrome API or cache)
+	songID, _, ok := splitSongFileName(parts[2])
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	album, err := fs.client.getAlbum(ctx, albumID)
+	if err != nil {
+		return nil, err
+	}
+	if !albumBelongsToArtist(album, artistID) {
+		return nil, os.ErrNotExist
+	}
+	multiDisc := isMultiDisc(album.Songs)
+	for _, s := range album.Songs {
+		if s.ID == songID {
+			return fs.openSong(ctx, s, multiDisc)
 		}
+	}
+
+	return nil, os.ErrNotExist
+}
+
+func albumBelongsToArtist(album *albumDetail, artistID string) bool {
+	return album.ArtistID == "" || album.ArtistID == artistID
+}
+
+func (fs *NavidromeFS) openCover(ctx context.Context, albumID string) (gofs.File, error) {
+	// Check in-memory cache first (avoid re-downloading on every OpenFile).
+	if data, ok := fs.readCoverMemCache(albumID); ok {
 		return &navMemFile{
 			reader: bytes.NewReader(data),
 			info:   &navFileInfo{name: CoverArtName, size: int64(len(data)), modTime: fs.startTime, isDir: false},
 		}, nil
 	}
 
-	// Song file content (stream from Navidrome API or cache) (\<artistID>\<albumID>\<songID>.<ext>)
-	if len(parts) == 3 {
-		songID := strings.TrimSuffix(parts[2], path.Ext(parts[2]))
-		ctx := context.Background()
+	if fs.coverCacheDir != "" {
+		if data, ok := fs.readCoverCache(albumID); ok {
+			fs.writeCoverMemCache(albumID, data)
+			return &navMemFile{
+				reader: bytes.NewReader(data),
+				info:   &navFileInfo{name: CoverArtName, size: int64(len(data)), modTime: fs.startTime, isDir: false},
+			}, nil
+		}
+	}
+	rc, err := fs.client.getCoverArt(ctx, albumID)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, fmt.Errorf("reading cover art: %w", err)
+	}
+	fs.writeCoverMemCache(albumID, data)
+	if fs.coverCacheDir != "" {
+		fs.writeCoverCache(albumID, data)
+	}
+	return &navMemFile{
+		reader: bytes.NewReader(data),
+		info:   &navFileInfo{name: CoverArtName, size: int64(len(data)), modTime: fs.startTime, isDir: false},
+	}, nil
+}
 
-		size, _, created, ok := ReadSongMeta(songID, fs.cacheDir)
-		if ok && fs.cacheDir != "" {
-			apiSong, err := fs.client.getSong(ctx, songID)
-			if err == nil && (apiSong.Size != size || apiSong.Created != created) {
-				log.Printf("Cache stale for %s, re-fetching", songID)
-				deleteCachedFiles(songID, fs.cacheDir)
-				size = apiSong.Size
-				created = apiSong.Created
-				ok = false
-			}
-			if err != nil {
-				ok = false
+func (fs *NavidromeFS) openSong(ctx context.Context, s song, multiDisc bool) (gofs.File, error) {
+	if fs.cacheDir != "" {
+		if cachedSize, _, cachedCreated, ok := ReadSongMeta(s.ID, fs.cacheDir); ok {
+			if cachedSize != s.Size || cachedCreated != s.Created {
+				log.Printf("Cache stale for %s, re-fetching", s.ID)
+				deleteCachedFiles(s.ID, fs.cacheDir)
 			}
 		}
-
-		if !ok {
-			songs, err := fs.client.getSongs(ctx, parts[1])
-			if err != nil {
-				return nil, err
-			}
-			for _, s := range songs {
-				if s.ID == songID {
-					size = s.Size
-					created = s.Created
-					ok = true
-					if fs.cacheDir != "" {
-						SaveSongMeta(songID, s.Size, s.ContentType, s.Created, fs.cacheDir)
-					}
-					break
-				}
-			}
-			if !ok {
-				return nil, os.ErrNotExist
-			}
-		}
-
-		return &navSongFile{
-			readSeeker: &readSeeker{
-				ctx:           ctx,
-				client:        fs.client,
-				songID:        songID,
-				cacheDir:      fs.cacheDir,
-				fileSize:      size,
-				chunkMemCache: &fs.chunkMemCache,
-			},
-			info: &navFileInfo{name: parts[2], size: size, modTime: parseTime(created), isDir: false},
-		}, nil
+		SaveSongMeta(s.ID, s.Size, s.ContentType, s.Created, fs.cacheDir)
 	}
 
-	return nil, os.ErrNotExist
+	return &navSongFile{
+		readSeeker: &readSeeker{
+			ctx:           ctx,
+			client:        fs.client,
+			songID:        s.ID,
+			cacheDir:      fs.cacheDir,
+			fileSize:      s.Size,
+			chunkMemCache: &fs.chunkMemCache,
+		},
+		info: &navFileInfo{name: songFileName(s, multiDisc), size: s.Size, modTime: parseTime(s.Created)},
+	}, nil
 }
 
 func (fs *NavidromeFS) Mkdir(name string, perm os.FileMode) error {

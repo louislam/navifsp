@@ -39,14 +39,19 @@ type rawAlbum struct {
 }
 
 type albumPayload struct {
-	ID   string    `json:"id"`
-	Name string    `json:"name"`
-	Song []rawSong `json:"song"`
+	ID       string    `json:"id"`
+	Name     string    `json:"name"`
+	ArtistId string    `json:"artistId,omitempty"`
+	Created  string    `json:"created,omitempty"`
+	Song     []rawSong `json:"song"`
 }
 
 type rawSong struct {
 	ID          string `json:"id"`
+	Title       string `json:"title,omitempty"`
 	Path        string `json:"path"`
+	Track       int    `json:"track,omitempty"`
+	DiscNumber  int    `json:"discNumber,omitempty"`
 	Size        int64  `json:"size"`
 	ContentType string `json:"contentType"`
 	Created     string `json:"created,omitempty"`
