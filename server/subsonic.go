@@ -219,52 +219,83 @@ func (c *subsonicClient) getAlbums(ctx context.Context, artistID string) ([]albu
 
 type song struct {
 	ID          string
+	Title       string
 	Path        string
+	Track       int
+	DiscNumber  int
 	Size        int64
 	ContentType string
 	Created     string
 }
 
-func (c *subsonicClient) getSongs(ctx context.Context, albumID string) ([]song, error) {
-	cacheKey := "songs:" + albumID
+// albumDetail is the getAlbum payload: album metadata plus its songs. It is
+// cached under one key so listing an album and opening its songs share the
+// same response.
+type albumDetail struct {
+	ID       string
+	Name     string
+	ArtistID string
+	Created  string
+	Songs    []song
+}
+
+func (c *subsonicClient) getAlbum(ctx context.Context, albumID string) (*albumDetail, error) {
+	cacheKey := "album:" + albumID
 
 	if cached, found := c.cache.Get(cacheKey); found {
-		debugLog("getSongs(%s): cache hit", albumID)
-		return cached.([]song), nil
+		debugLog("getAlbum(%s): cache hit", albumID)
+		return cached.(*albumDetail), nil
 	}
 
-	debugLog("getSongs(%s): cache miss, fetching from server", albumID)
+	debugLog("getAlbum(%s): cache miss, fetching from server", albumID)
 	body, err := c.doRequest(ctx, c.buildURL("getAlbum", map[string]string{"id": albumID}))
 	if err != nil {
-		debugLog("getSongs(%s): request error: %v", albumID, err)
+		debugLog("getAlbum(%s): request error: %v", albumID, err)
 		return nil, err
 	}
 	var resp subsonicResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		debugLog("getSongs(%s): unmarshal error: %v", albumID, err)
-		return nil, fmt.Errorf("decoding songs: %w", err)
+		debugLog("getAlbum(%s): unmarshal error: %v", albumID, err)
+		return nil, fmt.Errorf("decoding album: %w", err)
 	}
 	if resp.SubsonicResponse.Status == "failed" {
-		debugLog("getSongs(%s): subsonic API returned failed status", albumID)
+		debugLog("getAlbum(%s): subsonic API returned failed status", albumID)
 		return nil, fmt.Errorf("subsonic API error")
 	}
-	if resp.SubsonicResponse.Album == nil {
-		debugLog("getSongs(%s): no songs found", albumID)
-		return nil, nil
+
+	result := &albumDetail{ID: albumID}
+	if p := resp.SubsonicResponse.Album; p != nil {
+		result.ID = p.ID
+		if result.ID == "" {
+			result.ID = albumID
+		}
+		result.Name = p.Name
+		result.ArtistID = p.ArtistId
+		result.Created = p.Created
+		for _, s := range p.Song {
+			result.Songs = append(result.Songs, song{
+				ID:          s.ID,
+				Title:       s.Title,
+				Path:        s.Path,
+				Track:       s.Track,
+				DiscNumber:  s.DiscNumber,
+				Size:        s.Size,
+				ContentType: s.ContentType,
+				Created:     s.Created,
+			})
+		}
 	}
-	var result []song
-	for _, s := range resp.SubsonicResponse.Album.Song {
-		result = append(result, song{
-			ID:          s.ID,
-			Path:        s.Path,
-			Size:        s.Size,
-			ContentType: s.ContentType,
-			Created:     s.Created,
-		})
-	}
-	debugLog("getSongs(%s): cached %d songs for 10s", albumID, len(result))
+	debugLog("getAlbum(%s): cached %d songs for 10s", albumID, len(result.Songs))
 	c.cache.Set(cacheKey, result, cache.DefaultExpiration)
 	return result, nil
+}
+
+func (c *subsonicClient) getSongs(ctx context.Context, albumID string) ([]song, error) {
+	album, err := c.getAlbum(ctx, albumID)
+	if err != nil {
+		return nil, err
+	}
+	return album.Songs, nil
 }
 
 func (c *subsonicClient) getSong(ctx context.Context, songID string) (*song, error) {
@@ -291,7 +322,16 @@ func (c *subsonicClient) getSong(ctx context.Context, songID string) (*song, err
 		return nil, fmt.Errorf("song not found: %s", songID)
 	}
 	s := resp.SubsonicResponse.Song
-	result := &song{ID: s.ID, Path: s.Path, Size: s.Size, ContentType: s.ContentType, Created: s.Created}
+	result := &song{
+		ID:          s.ID,
+		Title:       s.Title,
+		Path:        s.Path,
+		Track:       s.Track,
+		DiscNumber:  s.DiscNumber,
+		Size:        s.Size,
+		ContentType: s.ContentType,
+		Created:     s.Created,
+	}
 	c.cache.Set(cacheKey, result, cache.DefaultExpiration)
 	return result, nil
 }

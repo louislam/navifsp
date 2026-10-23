@@ -8,6 +8,8 @@ It should also work with other music players.
 ## Features
 
 - Expose all music as normal files (*.mp3, *.flac, etc.)
+- Readable names:
+  `Artist [id]\Album [id]\01 - Song [id].flac`
 - Expose album covers as `cover.jpg`
 - Supports caching
 - Save bandwidth when scanning all files - only reads a small chunk of the song
@@ -17,9 +19,9 @@ It should also work with other music players.
 
 Mounted folder in File Explorer:
 
-<img width="600" src="https://github.com/user-attachments/assets/d8bf0e89-197b-4c09-b9cd-87614c42c31f" />
+<img width="600" src="https://github.com/user-attachments/assets/ca7287f5-2bcf-4367-89ef-147fd564bacc" />
 
-What it looks like in Foobar2000 (bascially no different from a local music
+What it looks like in Foobar2000 (basically no different from a local music
 library):
 
 <img width="600" src="https://github.com/user-attachments/assets/6135f4eb-8468-4a80-bdb2-d495b4bca8ec" />
@@ -45,6 +47,24 @@ library):
    `Monitor for changes while running` for better performance.
 
 <img width="500" src="https://github.com/user-attachments/assets/6c872d09-dea7-449c-b156-cc38964a2699" />
+
+### Path format
+
+```
+N:\Artist Name [artistID]\Album Name [albumID]\01 - Song Title [songID].flac
+N:\Artist Name [artistID]\Album Name [albumID]\cover.jpg
+```
+
+Multi-disc albums use `1-01 - Song Title [songID].flac`.
+
+The display text is for humans. The trailing `[id]` is what NaviFSP uses to
+find the artist, album or song, exactly like the previous ID-only paths, so
+name parsing adds no lookup cache. Characters that Windows does not allow in
+file names are replaced with `_`.
+
+Upgrading from an ID-only version changes every path. Let foobar2000 rescan
+the library once. Saved playlists that contain the old ID paths need to be
+rebuilt.
 
 ### Command line usage
 
@@ -104,13 +124,20 @@ To avoid duplicate albums, NaviFSP only shows albums where the artist is the
 primary album artist. Artists who only appear as co-artists or guest performers
 will have empty folders.
 
-### Why are the folder and filenames random IDs instead of artist/album/song names?
+### Why do folder and file names end with an ID?
 
-Using real names would require sanitizing characters that are illegal in Windows
-file paths, which can create collisions. I don't want to dig into it.
+Names are readable, but the trailing `[id]` is what NaviFSP uses to find the
+artist, album or song. Navidrome identifies items by ID, not by name, so
+keeping the ID in the path avoids a name-to-ID cache and keeps requests to a
+minimum.
 
-And this project is not meant to be used in File Explorer, after added to
-Foobar2000, everything will be well organized and displayed in Foobar2000.
+Because the ID is unique, two songs with the same title still get distinct
+files, and no `(2)` suffix is needed.
+
+### I upgraded and my foobar2000 library is empty
+
+Path names changed from pure IDs to `Name [id]`. Rescan the music library in
+foobar2000 once. Playlists that store the old ID paths need to be rebuilt.
 
 ## Motivation
 
@@ -124,7 +151,7 @@ Before I finally decided to write using WinFSP, the project was originally
 developed using TypeScript and WebDAV, and surprisingly, using WebDAV is very
 bad desicion:
 
-- Desipte the fact that Foobar2000 supports WebDAV natively, it can't show the
+- Despite the fact that Foobar2000 supports WebDAV natively, it can't show the
   album covers for unknown reason.
 - Windows is able to map WebDAV as a network drive, and some files are missing
   for unknown reason. (They are fine in WinSCP for comparison)
@@ -134,15 +161,13 @@ bad desicion:
 
 For WinFsp (or File explorer?), I just don't understand why the same file
 operations got fired multiple times at very short time interval, which make me
-no choice, I have to add 10 seconds cache to Navidrome requests, which is werid,
+no choice, I have to add 10 seconds cache to Navidrome requests, which is weird,
 but works.
 
 ## Possible Future Features?
 
 - Music transcoding? (File size issue, can't get the full file size without
   encoding the whole file?)
-- Add an option to use artist/album/track names instead of IDs in the file paths
-  (but it may have characters that are not allowed in Windows file paths)
 - Ability to play cached music offline, cache whole folder structure?
 - Playlists?
 - Foobar2000 component?

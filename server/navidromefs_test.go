@@ -19,6 +19,18 @@ import (
 	"github.com/joho/godotenv"
 )
 
+func testArtistPath(a artist) string {
+	return displayNameWithID(a.Name, a.ID)
+}
+
+func testAlbumPath(a artist, al album) string {
+	return testArtistPath(a) + "/" + displayNameWithID(al.Name, al.ID)
+}
+
+func testSongPath(a artist, al album, s song, songs []song) string {
+	return testAlbumPath(a, al) + "/" + songFileName(s, isMultiDisc(songs))
+}
+
 func navidromeClient(t *testing.T) *subsonicClient {
 	t.Helper()
 	godotenv.Load(".env")
@@ -310,7 +322,7 @@ func TestFSStatAndReadDirArtist(t *testing.T) {
 	if len(artists) == 0 {
 		t.Fatal("no artists found")
 	}
-	artistPath := artists[0].ID
+	artistPath := testArtistPath(artists[0])
 	t.Logf("Artist path: %s (%s)", artistPath, artists[0].Name)
 
 	info, err := fs.Stat(artistPath)
@@ -355,7 +367,7 @@ func TestFSStatAndReadDirAlbum(t *testing.T) {
 	if len(albums) == 0 {
 		t.Fatal("no albums found")
 	}
-	albumPath := artists[0].ID + "/" + albums[0].ID
+	albumPath := testAlbumPath(artists[0], albums[0])
 	t.Logf("Album path: %s (%s)", albumPath, albums[0].Name)
 
 	info, err := fs.Stat(albumPath)
@@ -410,7 +422,7 @@ func TestFSStatAndOpenCoverJpg(t *testing.T) {
 	if len(albums) == 0 {
 		t.Fatal("no albums found")
 	}
-	coverPath := artists[0].ID + "/" + albums[0].ID + "/" + CoverArtName
+	coverPath := testAlbumPath(artists[0], albums[0]) + "/" + CoverArtName
 
 	info, err := fs.Stat(coverPath)
 	if err != nil {
@@ -470,11 +482,7 @@ func TestFSOpenSong(t *testing.T) {
 		t.Fatal("no songs found")
 	}
 	s := songs[0]
-	ext := ""
-	if dot := strings.LastIndex(s.Path, "."); dot >= 0 {
-		ext = s.Path[dot:]
-	}
-	songPath := artists[0].ID + "/" + albums[0].ID + "/" + s.ID + ext
+	songPath := testSongPath(artists[0], albums[0], s, songs)
 	t.Logf("Song path: %s", songPath)
 
 	f, err := fs.OpenFile(songPath, os.O_RDONLY, 0)
@@ -533,11 +541,7 @@ func TestFSOpenSongUsesRangeRequestsWithoutCacheDir(t *testing.T) {
 		t.Fatal("no songs found")
 	}
 	s := songs[0]
-	ext := ""
-	if dot := strings.LastIndex(s.Path, "."); dot >= 0 {
-		ext = s.Path[dot:]
-	}
-	songPath := artists[0].ID + "/" + albums[0].ID + "/" + s.ID + ext
+	songPath := testSongPath(artists[0], albums[0], s, songs)
 
 	verbose = true
 	var logBuf bytes.Buffer
@@ -595,7 +599,7 @@ func TestFSCoverCache(t *testing.T) {
 		t.Fatal("no albums found")
 	}
 	albumID := albums[0].ID
-	coverPath := artists[0].ID + "/" + albumID + "/" + CoverArtName
+	coverPath := testAlbumPath(artists[0], albums[0]) + "/" + CoverArtName
 
 	f, err := fs.OpenFile(coverPath, os.O_RDONLY, 0)
 	if err != nil {
@@ -677,8 +681,8 @@ func mockSubsonicServer(t *testing.T) *subsonicClient {
 					"id": "album1",
 					"name": "Test Album",
 					"song": [
-						{"id": "song1", "path": "/music/song1.flac", "size": 1024, "contentType": "audio/flac", "created": "2019-06-20T14:00:00Z"},
-						{"id": "song2", "path": "/music/song2.mp3", "size": 512, "contentType": "audio/mpeg", "created": "2021-01-10T08:00:00Z"}
+						{"id": "song1", "title": "First Song", "track": 1, "path": "/music/song1.flac", "size": 1024, "contentType": "audio/flac", "created": "2019-06-20T14:00:00Z"},
+						{"id": "song2", "title": "Second Song", "track": 2, "path": "/music/song2.mp3", "size": 512, "contentType": "audio/mpeg", "created": "2021-01-10T08:00:00Z"}
 					]
 				}
 			}
@@ -693,7 +697,7 @@ func TestOpenFileSongUsesCreatedTimestamp(t *testing.T) {
 	client := mockSubsonicServer(t)
 	fs := NewNavidromeFS(client, "", "")
 
-	f, err := fs.OpenFile("artist1/album1/song1.flac", os.O_RDONLY, 0)
+	f, err := fs.OpenFile("Test Artist [artist1]/Test Album [album1]/01 - First Song [song1].flac", os.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -713,7 +717,7 @@ func TestStatSongUsesCreatedTimestamp(t *testing.T) {
 	client := mockSubsonicServer(t)
 	fs := NewNavidromeFS(client, "", "")
 
-	info, err := fs.Stat("artist1/album1/song2.mp3")
+	info, err := fs.Stat("Test Artist [artist1]/Test Album [album1]/02 - Second Song [song2].mp3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -727,7 +731,7 @@ func TestAlbumDirListingSongModTimes(t *testing.T) {
 	client := mockSubsonicServer(t)
 	fs := NewNavidromeFS(client, "", "")
 
-	f, err := fs.OpenFile("artist1/album1", os.O_RDONLY, 0)
+	f, err := fs.OpenFile("Test Artist [artist1]/Test Album [album1]", os.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,8 +743,8 @@ func TestAlbumDirListingSongModTimes(t *testing.T) {
 	}
 
 	expected := map[string]time.Time{
-		"song1.flac": time.Date(2019, 6, 20, 14, 0, 0, 0, time.UTC),
-		"song2.mp3":  time.Date(2021, 1, 10, 8, 0, 0, 0, time.UTC),
+		"01 - First Song [song1].flac": time.Date(2019, 6, 20, 14, 0, 0, 0, time.UTC),
+		"02 - Second Song [song2].mp3": time.Date(2021, 1, 10, 8, 0, 0, 0, time.UTC),
 	}
 	for _, e := range entries {
 		if exp, ok := expected[e.Name()]; ok {
@@ -857,6 +861,9 @@ func TestGetCoverArtRejectsErrorStatus(t *testing.T) {
 
 func TestCoverArtNotCachedOnServerError(t *testing.T) {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/rest/getAlbum", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"subsonic-response":{"status":"ok","album":{"id":"album1","name":"Test Album","artistId":"artist1","song":[]}}}`))
+	})
 	mux.HandleFunc("/rest/getCoverArt", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server error", http.StatusInternalServerError)
 	})
@@ -867,7 +874,7 @@ func TestCoverArtNotCachedOnServerError(t *testing.T) {
 	cacheDir := t.TempDir()
 	fs := NewNavidromeFS(client, "", cacheDir)
 
-	_, err := fs.OpenFile("artist1/album1/cover.jpg", os.O_RDONLY, 0)
+	_, err := fs.OpenFile("Test Artist [artist1]/Test Album [album1]/cover.jpg", os.O_RDONLY, 0)
 	if err == nil {
 		t.Fatal("expected error opening cover when server returns 500")
 	}
@@ -902,7 +909,7 @@ func TestSongChunkNotCachedOnServerError(t *testing.T) {
 	cacheDir := t.TempDir()
 	fs := NewNavidromeFS(client, cacheDir, "")
 
-	f, err := fs.OpenFile("artist1/album1/song1.flac", os.O_RDONLY, 0)
+	f, err := fs.OpenFile("Test Artist [artist1]/Test Album [album1]/song1 [song1].flac", os.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1017,7 +1024,7 @@ func TestReadAtFillsRequestedBuffer(t *testing.T) {
 	client, src := rangeMockSong(t, size)
 	fs := NewNavidromeFS(client, "", "")
 
-	f, err := fs.OpenFile("artist1/album1/song1.flac", os.O_RDONLY, 0)
+	f, err := fs.OpenFile("Test Artist [artist1]/Test Album [album1]/song1 [song1].flac", os.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1058,7 +1065,7 @@ func TestReadFillsRequestedBuffer(t *testing.T) {
 	client, src := rangeMockSong(t, size)
 	fs := NewNavidromeFS(client, "", "")
 
-	f, err := fs.OpenFile("artist1/album1/song1.flac", os.O_RDONLY, 0)
+	f, err := fs.OpenFile("Test Artist [artist1]/Test Album [album1]/song1 [song1].flac", os.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1105,6 +1112,9 @@ func TestCoverCopySimulation(t *testing.T) {
 	mux.HandleFunc("/rest/getArtist", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"subsonic-response":{"status":"ok","artist":{"id":"artist1","name":"Test Artist","album":[{"id":"album1","name":"Test Album","created":"2020-01-01T00:00:00Z"}]}}}`))
 	})
+	mux.HandleFunc("/rest/getAlbum", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"subsonic-response":{"status":"ok","album":{"id":"album1","name":"Test Album","artistId":"artist1","song":[]}}}`))
+	})
 	mux.HandleFunc("/rest/getCoverArt", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(cover)
 	})
@@ -1114,7 +1124,7 @@ func TestCoverCopySimulation(t *testing.T) {
 	client := newSubsonicClient(srv.URL, "user", "pass")
 	fs := NewNavidromeFS(client, "", "")
 
-	f, err := fs.OpenFile("artist1/album1/cover.jpg", os.O_RDONLY, 0)
+	f, err := fs.OpenFile("Test Artist [artist1]/Test Album [album1]/cover.jpg", os.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1174,7 +1184,7 @@ func TestAlbumListingCoverSizeUsesHeadNotFullDownload(t *testing.T) {
 	client := newSubsonicClient(srv.URL, "user", "pass")
 	fs := NewNavidromeFS(client, "", "")
 
-	f, err := fs.OpenFile("artist1/album1", os.O_RDONLY, 0)
+	f, err := fs.OpenFile("Artist One [artist1]/Album A [album1]", os.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1209,6 +1219,9 @@ func TestCoverStatSizeFallsBackWhenHeadFails(t *testing.T) {
 	mux.HandleFunc("/rest/getArtist", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"subsonic-response":{"status":"ok","artist":{"id":"artist1","name":"Artist One","album":[{"id":"album1","name":"Album A","artistId":"artist1","created":"2020-01-01T00:00:00Z"}]}}}`))
 	})
+	mux.HandleFunc("/rest/getAlbum", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"subsonic-response":{"status":"ok","album":{"id":"album1","name":"Album A","artistId":"artist1","song":[]}}}`))
+	})
 	mux.HandleFunc("/rest/getCoverArt", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodHead {
 			http.Error(w, "no head support", http.StatusInternalServerError)
@@ -1223,7 +1236,7 @@ func TestCoverStatSizeFallsBackWhenHeadFails(t *testing.T) {
 	client := newSubsonicClient(srv.URL, "user", "pass")
 	fs := NewNavidromeFS(client, "", "")
 
-	info, err := fs.Stat("artist1/album1/cover.jpg")
+	info, err := fs.Stat("Artist One [artist1]/Album A [album1]/cover.jpg")
 	if err != nil {
 		t.Fatal(err)
 	}
