@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/pflag"
@@ -30,21 +30,6 @@ func main() {
 		}
 	}
 
-	// --stop: kill all running navifsp.exe processes
-	for _, arg := range os.Args[1:] {
-		if arg == "--stop" {
-			cmd := exec.Command("taskkill", "/IM", "navifsp.exe", "/F")
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				fmt.Println("No running NaviFSP process found.")
-			} else {
-				fmt.Println("NaviFSP stopped.")
-			}
-			os.Exit(0)
-		}
-	}
-
 	loadEnv()
 
 	if os.Getenv("NAVIFSP_NO_WINDOW") == "true" {
@@ -64,14 +49,10 @@ func main() {
 	pflag.String("cache-dir", filepath.Join(os.Getenv("LOCALAPPDATA"), "navifsp", "cache"), "disk cache directory")
 	pflag.Bool("verbose", false, "enable debug logging")
 	pflag.Bool("no-window", false, "hide console window")
-	pflag.Bool("startup-at-login", false, "auto-start on Windows login (with --no-window)")
 	pflag.Usage = func() {
 		fmt.Printf(`NaviFSP %s
 
 Usage: navifsp --base-url <URL> --username <U> --password <P> [options]
-
-Commands:
-  --stop    Stop all running NaviFSP processes
 
 Options:
 `, version)
@@ -87,6 +68,7 @@ Environment variables:
   NAVIFSP_ENABLE_MUSIC_CACHE  Enable disk cache
   NAVIFSP_ENABLE_COVER_CACHE Enable in-memory cover art cache
   NAVIFSP_CACHE_DIR     Disk cache directory
+  NAVIFSP_NO_WINDOW     Hide console window
 `)
 	}
 	pflag.Parse()
@@ -98,10 +80,7 @@ Environment variables:
 	viper.BindEnv("enable-music-cache", "NAVIFSP_ENABLE_MUSIC_CACHE")
 	viper.BindEnv("enable-cover-cache", "NAVIFSP_ENABLE_COVER_CACHE")
 	viper.BindEnv("cache-dir", "NAVIFSP_CACHE_DIR")
-	viper.BindEnv("startup-at-login", "NAVIFSP_STARTUP_AT_LOGIN")
 	viper.BindEnv("no-window", "NAVIFSP_NO_WINDOW")
-
-	syncStartup(viper.GetBool("startup-at-login"))
 
 	baseURL := viper.GetString("base-url")
 	username := viper.GetString("username")
@@ -143,11 +122,30 @@ Environment variables:
 
 	log.Printf("Mounted Navidrome filesystem at %s", mountpoint)
 
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt)
-	<-ch
+	waitForExit(mountpoint, baseURL)
 
 	log.Println("Unmounting...")
+}
+
+// waitForExit keeps NaviFSP alive: the tray icon ends the wait with Exit, and
+// Ctrl+C closes it the same way.
+func waitForExit(mountpoint, baseURL string) {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt)
+
+	state := trayState{version: version, mountpoint: mountpoint, baseURL: baseURL}
+	go func() {
+		<-signals
+		closeTray()
+	}()
+
+	// A window and its message queue belong to the OS thread that created them,
+	// so this thread stays with the tray until the user exits.
+	runtime.LockOSThread()
+	if err := runTray(state); err != nil {
+		log.Printf("Tray icon unavailable: %v", err)
+		<-signals
+	}
 }
 
 func loadEnv() {

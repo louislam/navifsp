@@ -8,6 +8,7 @@
 *.exe
 *.lnk
 *log
+*.syso
 
 /foobar-plugin/foo_navifsp
 /foobar-plugin/x64

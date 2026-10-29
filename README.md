@@ -8,9 +8,9 @@ It should also work with other music players.
 ## Features
 
 - Expose all music as normal files (*.mp3, *.flac, etc.)
-- Readable names:
-  `Artist [id]\Album [id]\01 - Song [id].flac`
+- Readable names: `Artist [id]\Album [id]\01 - Song [id].flac`
 - Expose album covers as `cover.jpg`
+- Tray icon: open the mounted drive or Navidrome, start with Windows, exit
 - Supports caching
 - Save bandwidth when scanning all files - only reads a small chunk of the song
   data to get the metadata.
@@ -57,14 +57,13 @@ N:\Artist Name [artistID]\Album Name [albumID]\cover.jpg
 
 Multi-disc albums use `1-01 - Song Title [songID].flac`.
 
-The display text is for humans. The trailing `[id]` is what NaviFSP uses to
-find the artist, album or song, exactly like the previous ID-only paths, so
-name parsing adds no lookup cache. Characters that Windows does not allow in
-file names are replaced with `_`.
+The display text is for humans. The trailing `[id]` is what NaviFSP uses to find
+the artist, album or song, exactly like the previous ID-only paths, so name
+parsing adds no lookup cache. Characters that Windows does not allow in file
+names are replaced with `_`.
 
-Upgrading from an ID-only version changes every path. Let foobar2000 rescan
-the library once. Saved playlists that contain the old ID paths need to be
-rebuilt.
+Upgrading from an ID-only version changes every path. Let foobar2000 rescan the
+library once. Saved playlists that contain the old ID paths need to be rebuilt.
 
 ### Command line usage
 
@@ -77,17 +76,13 @@ navifsp.exe --username abc --password 123 --base-url https://yournavidrome.com -
 
 ### Stop NaviFSP
 
-To stop all running NaviFSP processes:
-
-```bash
-navifsp.exe --stop
-```
+Right-click the tray icon and click **Exit**. It unmounts the drive before the
+process ends.
 
 ### Flags and Environment Variables
 
 | Flag                   | Env Var                      | Default                       | Required | Description                                                   |
 | ---------------------- | ---------------------------- | ----------------------------- | -------- | ------------------------------------------------------------- |
-| `--stop`               |                              |                               |          | Stop all running NaviFSP processes                            |
 | `--username`           | `NAVIFSP_USERNAME`           |                               | Yes      | Navidrome username                                            |
 | `--password`           | `NAVIFSP_PASSWORD`           |                               | Yes      | Navidrome password                                            |
 | `--base-url`           | `NAVIFSP_BASE_URL`           |                               | Yes      | Navidrome base URL (e.g. https://yournavidrome.com)           |
@@ -97,17 +92,25 @@ navifsp.exe --stop
 | `--cache-dir`          | `NAVIFSP_CACHE_DIR`          | `AppData\Local\navifsp\cache` | No       | Disk cache directory (only used when cache enabled)           |
 | `--verbose`            | `NAVIFSP_VERBOSE`            | `false`                       | No       | Enable debug logging                                          |
 | `--no-window`          | `NAVIFSP_NO_WINDOW`          | `false`                       | No       | Hide console window                                           |
-| `--startup-at-login`   | `NAVIFSP_STARTUP_AT_LOGIN`   | `false`                       | No       | Auto-start on Windows login (with `--no-window`)              |
 
 Environment variables can also be set via a `.env` file next to the exe file.
 
+### Tray icon
+
+While mounted, NaviFSP shows a tray icon:
+
+- Click it to open the mounted drive in File Explorer.
+- Right-click for the menu: open the mounted drive, open your Navidrome site,
+  toggle **Start with Windows**, or **Exit**.
+
+**Exit** unmounts cleanly before the process ends.
+
 ### Add to Startup
 
-1. You must have to use `.env` file to configure, flags are not supported.
-2. NAVIFSP_NO_WINDOW=true
-3. NAVIFSP_STARTUP_AT_LOGIN=true
-4. Run `navifsp.exe`, now it should be running in the background, also next time
-   you login, it will auto start.
+Tick **Start with Windows** in the tray menu. Windows then starts NaviFSP at
+login with a hidden console window, so only the tray icon shows.
+
+Untick it to remove the entry again.
 
 ## Q&A
 
@@ -127,9 +130,8 @@ will have empty folders.
 ### Why do folder and file names end with an ID?
 
 Names are readable, but the trailing `[id]` is what NaviFSP uses to find the
-artist, album or song. Navidrome identifies items by ID, not by name, so
-keeping the ID in the path avoids a name-to-ID cache and keeps requests to a
-minimum.
+artist, album or song. Navidrome identifies items by ID, not by name, so keeping
+the ID in the path avoids a name-to-ID cache and keeps requests to a minimum.
 
 Because the ID is unique, two songs with the same title still get distinct
 files, and no `(2)` suffix is needed.

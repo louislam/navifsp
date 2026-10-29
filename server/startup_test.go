@@ -20,6 +20,10 @@ func TestStartupSync(t *testing.T) {
 	// Enable
 	syncStartup(true)
 
+	if !startupEnabled() {
+		t.Fatal("startupEnabled() is false after syncStartup(true)")
+	}
+
 	exePath, err := os.Executable()
 	if err != nil {
 		t.Fatalf("failed to get exe path: %v", err)
@@ -54,6 +58,9 @@ func TestStartupSync(t *testing.T) {
 	_, _, err = key.GetStringValue(startupAppName)
 	if err == nil {
 		t.Fatal("expected startup value to be deleted, still exists")
+	}
+	if startupEnabled() {
+		t.Fatal("startupEnabled() is true after syncStartup(false)")
 	}
 	t.Log("Startup removed successfully")
 }
